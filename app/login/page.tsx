@@ -6,7 +6,6 @@ import { createClient } from "@/utils/supabase/client";
 
 export default function LoginPage() {
   const router = useRouter();
-  const supabase = createClient();
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -25,6 +24,7 @@ export default function LoginPage() {
     const errorDescription = params.get("error_description");
 
     if (type === "invite" && accessToken && refreshToken) {
+      const supabase = createClient();
       // Establish the session from the invite tokens, then redirect to set password
       supabase.auth
         .setSession({ access_token: accessToken, refresh_token: refreshToken })
@@ -40,13 +40,14 @@ export default function LoginPage() {
     } else if (errorDescription) {
       setError(decodeURIComponent(errorDescription.replace(/\+/g, " ")));
     }
-  }, [router, supabase.auth]);
+  }, [router]);
 
   async function handleLogin(e: React.FormEvent) {
     e.preventDefault();
     setLoading(true);
     setError(null);
 
+    const supabase = createClient();
     const { error } = await supabase.auth.signInWithPassword({
       email,
       password,

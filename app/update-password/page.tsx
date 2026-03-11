@@ -6,7 +6,6 @@ import { createClient } from "@/utils/supabase/client";
 
 export default function UpdatePasswordPage() {
   const router = useRouter();
-  const supabase = createClient();
 
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
@@ -29,6 +28,7 @@ export default function UpdatePasswordPage() {
 
     setLoading(true);
 
+    const supabase = createClient();
     const { error } = await supabase.auth.updateUser({ password });
 
     if (error) {
