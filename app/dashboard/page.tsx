@@ -245,15 +245,19 @@ export default function DashboardPage() {
 
   const handleFiltroChange = useCallback((campo: string, valores: string[]) => {
     setProcessing(true);
-    setFiltrosActivos(prev => ({ ...prev, [campo]: valores }));
+    setTimeout(() => {
+      setFiltrosActivos(prev => ({ ...prev, [campo]: valores }));
+    }, 0);
   }, []);
 
   const limpiarFiltros = useCallback(() => {
     setProcessing(true);
-    const init: Record<string, string[]> = {};
-    FILTROS.forEach(f => { init[f.campo] = []; });
-    setFiltrosActivos(init);
-    setProgramasSeleccionados([]);
+    setTimeout(() => {
+      const init: Record<string, string[]> = {};
+      FILTROS.forEach(f => { init[f.campo] = []; });
+      setFiltrosActivos(init);
+      setProgramasSeleccionados([]);
+    }, 0);
   }, []);
 
   const hayFiltros = Object.values(filtrosActivos).some(v => v.length > 0);
@@ -522,7 +526,7 @@ export default function DashboardPage() {
               <ProgramaDropdown
                 programas={programasFiltrados}
                 seleccionados={programasSeleccionados}
-                onChange={(sel) => { setProcessing(true); setProgramasSeleccionados(sel); }}
+                onChange={(sel) => { setProcessing(true); setTimeout(() => setProgramasSeleccionados(sel), 0); }}
               />
             </div>
             <div>
@@ -643,7 +647,7 @@ export default function DashboardPage() {
           {/* Fecha consulta */}
           <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-3 text-center">
             <p className="text-sm text-gray-900 uppercase tracking-wide mb-2 font-bold">Fecha de consulta</p>
-            <input type="date" value={fechaConsulta} onChange={e => setFechaConsulta(e.target.value)}
+            <input type="date" value={fechaConsulta} onChange={e => { const v = e.target.value; setProcessing(true); setTimeout(() => setFechaConsulta(v), 0); }}
               className="w-full text-center text-sm font-bold text-amber-500 border border-gray-300 rounded-md p-1 focus:border-blue-800 focus:ring-blue-800" />
             <p className="text-sm text-gray-500 mt-1">{diasText}</p>
           </div>
@@ -665,7 +669,7 @@ export default function DashboardPage() {
                 <span className="flex items-center gap-1"><span className="w-3 h-3 rounded-full inline-block" style={{ background: '#d97706' }}></span> {CONFIG.metricas[metrica]?.label || metrica} 2025</span>
                 <span className="flex items-center gap-1"><span className="w-3 h-3 rounded-full inline-block border-2 border-dashed border-blue-800"></span> Proyección</span>
               </div>
-              <select value={metrica} onChange={e => { setProcessing(true); setMetrica(e.target.value); }}
+              <select value={metrica} onChange={e => { const v = e.target.value; setProcessing(true); setTimeout(() => setMetrica(v), 0); }}
                 className="rounded-md border-gray-300 shadow-sm focus:border-blue-800 focus:ring-blue-800 text-xs p-1.5 border">
                 <option value="total_convertidos">Total Convertidos</option>
                 <option value="total_tuberia">Total Tubería</option>
