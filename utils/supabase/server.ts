@@ -1,12 +1,20 @@
 import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
 
+function readEnvValue(name: string): string {
+  const raw = (process.env[name] || "").trim();
+  const value = raw.startsWith(`${name}=`) ? raw.slice(name.length + 1).trim() : raw;
+  return value.replace(/^['"]|['"]$/g, "");
+}
+
 export async function createClient() {
   const cookieStore = await cookies();
+  const supabaseUrl = readEnvValue("NEXT_PUBLIC_SUPABASE_URL");
+  const supabaseAnonKey = readEnvValue("NEXT_PUBLIC_SUPABASE_ANON_KEY");
 
   return createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    supabaseUrl,
+    supabaseAnonKey,
     {
       cookies: {
         getAll() {
