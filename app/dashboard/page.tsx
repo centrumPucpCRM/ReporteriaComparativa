@@ -79,8 +79,8 @@ function FilterDropdown({ campo, label, filtrosActivos, onFiltroChange }: Filter
               <span>Todos</span>
             </label>
             {filtrados.map(valor => (
-              <label key={valor} className="flex items-center gap-2 px-1 py-0.5 rounded hover:bg-gray-50 cursor-pointer text-xs">
-                <input type="checkbox" className="rounded border-gray-300" checked={seleccionados.includes(valor)}
+              <div key={valor} className="group flex items-center gap-2 px-1 py-0.5 rounded hover:bg-gray-50 text-xs">
+                <input type="checkbox" className="rounded border-gray-300 cursor-pointer shrink-0" checked={seleccionados.includes(valor)}
                   onChange={e => {
                     if (e.target.checked) {
                       onFiltroChange(campo, [...seleccionados, valor]);
@@ -88,8 +88,15 @@ function FilterDropdown({ campo, label, filtrosActivos, onFiltroChange }: Filter
                       onFiltroChange(campo, seleccionados.filter(v => v !== valor));
                     }
                   }} />
-                <span className="truncate">{valor}</span>
-              </label>
+                <span className="truncate flex-1 cursor-pointer" onClick={() => {
+                  onFiltroChange(campo, seleccionados.includes(valor) && seleccionados.length === 1 ? [] : [...seleccionados.filter(v => v !== valor), valor]);
+                }}>{valor}</span>
+                <button
+                  type="button"
+                  onClick={() => onFiltroChange(campo, [valor])}
+                  className="hidden group-hover:inline text-[11px] text-blue-700 hover:text-blue-900 shrink-0 font-semibold bg-blue-50 hover:bg-blue-100 px-2 py-0.5 rounded border border-blue-200"
+                >Solo</button>
+              </div>
             ))}
           </div>
         </div>
@@ -160,8 +167,8 @@ function ProgramaDropdown({ programas, seleccionados, onChange }: ProgramaDropdo
               <span>Todos</span>
             </label>
             {filtrados.map(p => (
-              <label key={p.codigo} className="flex items-center gap-2 px-1 py-0.5 rounded hover:bg-gray-50 cursor-pointer text-xs">
-                <input type="checkbox" className="rounded border-gray-300" checked={seleccionados.includes(p.codigo)}
+              <div key={p.codigo} className="group flex items-center gap-2 px-1 py-0.5 rounded hover:bg-gray-50 text-xs">
+                <input type="checkbox" className="rounded border-gray-300 cursor-pointer shrink-0" checked={seleccionados.includes(p.codigo)}
                   onChange={e => {
                     if (e.target.checked) {
                       onChange([...seleccionados, p.codigo]);
@@ -169,8 +176,15 @@ function ProgramaDropdown({ programas, seleccionados, onChange }: ProgramaDropdo
                       onChange(seleccionados.filter(c => c !== p.codigo));
                     }
                   }} />
-                <span className="truncate">{p.nombre}</span>
-              </label>
+                <span className="truncate flex-1 cursor-pointer" onClick={() => {
+                  onChange(seleccionados.includes(p.codigo) && seleccionados.length === 1 ? [] : [...seleccionados.filter(c => c !== p.codigo), p.codigo]);
+                }}>{p.nombre}</span>
+                <button
+                  type="button"
+                  onClick={() => onChange([p.codigo])}
+                  className="hidden group-hover:inline text-[11px] text-blue-700 hover:text-blue-900 shrink-0 font-semibold bg-blue-50 hover:bg-blue-100 px-2 py-0.5 rounded border border-blue-200"
+                >Solo</button>
+              </div>
             ))}
           </div>
         </div>
@@ -500,7 +514,7 @@ export default function DashboardPage() {
           <div className="flex items-center justify-between mb-3">
             <h2 className="text-sm font-semibold text-gray-700">Filtros</h2>
             {hayFiltros && (
-              <button onClick={limpiarFiltros} className="text-xs text-blue-800 hover:underline">Limpiar filtros</button>
+              <button onClick={limpiarFiltros} className="text-sm font-bold text-blue-800 hover:underline">Limpiar filtros</button>
             )}
           </div>
           <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
