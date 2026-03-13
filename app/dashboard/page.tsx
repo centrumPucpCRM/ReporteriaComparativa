@@ -15,6 +15,8 @@ const FILTROS = [
   { campo: 'programa.origen', label: 'Origen' },
 ];
 
+const EXPORT_ENDPOINT_URL = 'https://mmjiksul4auqrsgyypbmazwmlq0kkxbi.lambda-url.us-east-1.on.aws/';
+
 interface FilterDropdownProps {
   campo: string;
   label: string;
@@ -125,6 +127,14 @@ interface Par2025DropdownProps {
   onChange: (codigo: string) => void;
 }
 
+interface ExportEndpointResult {
+  ok: boolean;
+  status: number;
+  message: string;
+  ruta2025: string | null;
+  ruta2026: string | null;
+}
+
 function ProgramaDropdown({ programas, seleccionados, onChange }: ProgramaDropdownProps) {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState('');
@@ -230,12 +240,6 @@ function Par2025Dropdown({ opciones, seleccionado, automaticoInfo, disabled = fa
     ? opciones.find(op => op.codigo === seleccionado)
     : null;
 
-  const fmtFecha = (iso: string | null) => {
-    if (!iso) return '';
-    const [y, m, d] = iso.split('-');
-    return `${d}/${m}/${y}`;
-  };
-
   const automaticoLabel = automaticoInfo
     ? `Par automático`
     : 'Par automático';
@@ -249,7 +253,7 @@ function Par2025Dropdown({ opciones, seleccionado, automaticoInfo, disabled = fa
   const hasSelection = !disabled && !!seleccionadoObj;
 
   const seleccionar = (codigo: string) => {
-    onChange(codigo);
+    onChange(codigo); 
     setOpen(false);
   };
 
@@ -325,6 +329,11 @@ export default function DashboardPage() {
   const [programasSeleccionados, setProgramasSeleccionados] = useState<string[]>([]);
   const [codigoPar2025Seleccionado, setCodigoPar2025Seleccionado] = useState('');
   const [codigoPrograma2026ActivoPar, setCodigoPrograma2026ActivoPar] = useState('');
+  const [showExportModal, setShowExportModal] = useState(false);
+  const [exportSending, setExportSending] = useState(false);
+  const [exportResult, setExportResult] = useState<ExportEndpointResult | null>(null);
+  const [exportError, setExportError] = useState('');
+  const [downloadingTipo, setDownloadingTipo] = useState<'2025' | '2026' | null>(null);
   const [metrica, setMetrica] = useState('total_convertidos');
   const [fechaConsulta, setFechaConsulta] = useState(() => new Date().toISOString().slice(0, 10));
   const [modo, setModo] = useState<'alumnos' | 'pxq'>('alumnos');
@@ -423,6 +432,168 @@ export default function DashboardPage() {
       inauguracion: (prog2025?.[CONFIG.campos.inauguracion] as string) || null,
     };
   }, [dataLoaded, programasSeleccionados]);
+
+  const programas2026Export = useMemo(() => {
+    if (!dataLoaded) return [] as { codigo: string; nombre: string }[];
+
+    const codigosBase = programasSeleccionados.length > 0
+      ? programasSeleccionados
+      : programasFiltrados.map(p => p.codigo);
+
+    const codigosUnicos = [...new Set(codigosBase)];
+    return codigosUnicos.map(codigo => {
+      const prog = DataService.getPrograma(codigo, 2026);
+      return {
+        codigo,
+        nombre: String(prog?.['programa.nombre'] || codigo),
+      };
+    });
+  }, [dataLoaded, programasSeleccionados, programasFiltrados]);
+
+  const programas2025Export = useMemo(() => {
+    if (!dataLoaded || programas2026Export.length === 0) return [] as { codigo: string; nombre: string }[];
+
+    let codigos2025: string[] = [];
+    if (programas2026Export.length === 1) {
+      const codigo2026 = programas2026Export[0].codigo;
+      const codigo2025 = codigoPar2025Seleccionado || DataService.buscarPar(codigo2026);
+      codigos2025 = codigo2025 ? [codigo2025] : [];
+    } else {
+      const set2025 = new Set<string>();
+      programas2026Export.forEach(p => {
+        const codigo2025 = DataService.buscarPar(p.codigo);
+        if (codigo2025) set2025.add(codigo2025);
+      });
+      codigos2025 = [...set2025];
+    }
+
+    return codigos2025.map(codigo => {
+      const prog = DataService.getPrograma(codigo, 2025);
+      return {
+        codigo,
+        nombre: String(prog?.['programa.nombre'] || codigo),
+      };
+    });
+  }, [dataLoaded, programas2026Export, codigoPar2025Seleccionado]);
+
+  const exportPayload = useMemo(() => {
+    return {
+      codigos2025: programas2025Export.map(p => p.codigo),
+      codigos2026: programas2026Export.map(p => p.codigo),
+      fechaConsulta,
+    };
+  }, [programas2025Export, programas2026Export, fechaConsulta]);
+
+  const rutaDescargable = useCallback((ruta: string) => {
+    if (!ruta) return '';
+    if (ruta.startsWith('http://') || ruta.startsWith('https://')) return ruta;
+
+    const m = ruta.match(/^s3:\/\/([^/]+)\/(.+)$/i);
+    if (!m) return ruta;
+
+    const bucket = m[1];
+    const key = m[2].split('/').map(segment => encodeURIComponent(segment)).join('/');
+    return `https://${bucket}.s3.amazonaws.com/${key}`;
+  }, []);
+
+  const descargarCsv = useCallback(async (ruta: string, tipo: '2025' | '2026') => {
+    if (!ruta) return;
+
+    setDownloadingTipo(tipo);
+    setExportError('');
+
+    const url = rutaDescargable(ruta);
+    const nombreFallback = `ReporteComparativoProgramas${tipo}-${fechaConsulta.replace(/-/g, '')}.csv`;
+    const nombreArchivo = decodeURIComponent((ruta.split('/').pop() || nombreFallback).split('?')[0]);
+
+    try {
+      const response = await fetch(url);
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
+      const blob = await response.blob();
+      const objectUrl = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = objectUrl;
+      a.download = nombreArchivo;
+      a.style.display = 'none';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(objectUrl);
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      setExportError(`No se pudo descargar CSV ${tipo}: ${msg}`);
+    } finally {
+      setDownloadingTipo(null);
+    }
+  }, [fechaConsulta, rutaDescargable]);
+
+  const enviarExportacion = useCallback(async () => {
+    if (exportSending || downloadingTipo !== null) return;
+
+    setExportSending(true);
+    setExportError('');
+    setExportResult(null);
+
+    try {
+      const response = await fetch(EXPORT_ENDPOINT_URL, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(exportPayload),
+      });
+
+      const rawText = await response.text();
+      let parsedJson: unknown = null;
+
+      try {
+        parsedJson = JSON.parse(rawText);
+      } catch {
+        parsedJson = null;
+      }
+
+      const parsedObj = (parsedJson && typeof parsedJson === 'object') ? parsedJson as Record<string, unknown> : null;
+      const bodyObj = (parsedObj?.body && typeof parsedObj.body === 'object') ? parsedObj.body as Record<string, unknown> : null;
+
+      const resultado: ExportEndpointResult = {
+        ok: response.ok,
+        status: response.status,
+        message:
+          (typeof bodyObj?.message === 'string' && bodyObj.message)
+          || (typeof parsedObj?.message === 'string' && parsedObj.message)
+          || (response.ok ? 'All OK' : `HTTP ${response.status}`),
+        ruta2025:
+          (typeof bodyObj?.ruta2025 === 'string' && bodyObj.ruta2025)
+          || (typeof parsedObj?.ruta2025 === 'string' && parsedObj.ruta2025)
+          || null,
+        ruta2026:
+          (typeof bodyObj?.ruta2026 === 'string' && bodyObj.ruta2026)
+          || (typeof parsedObj?.ruta2026 === 'string' && parsedObj.ruta2026)
+          || null,
+      };
+
+      console.log('Respuesta endpoint export:', resultado);
+      setExportResult(resultado);
+
+      if (!response.ok) {
+        setExportError(`El endpoint respondió con status ${response.status}.`);
+      }
+    } catch (error) {
+      const errMsg = error instanceof Error ? error.message : String(error);
+      console.error('Error enviando exportacion:', error);
+      setExportResult({
+        ok: false,
+        status: 0,
+        message: errMsg,
+        ruta2025: null,
+        ruta2026: null,
+      });
+      setExportError(`Error enviando exportación: ${errMsg}`);
+    } finally {
+      setExportSending(false);
+    }
+  }, [exportPayload, descargarCsv, exportSending, downloadingTipo]);
 
   // Clean selections when filters change
   useEffect(() => {
@@ -689,6 +860,8 @@ export default function DashboardPage() {
     return `${d}/${m}/${y}`;
   };
 
+  const exportBusy = exportSending || downloadingTipo !== null;
+
   const avance2026 = kpiState.y2026.avance;
   const avance2025 = kpiState.y2025.avance;
   const avanceColor2026 = avance2026 != null ? (avance2026 <= 80 ? 'text-red-600' : avance2026 <= 90 ? 'text-yellow-600' : 'text-green-600') : 'text-amber-500';
@@ -782,6 +955,20 @@ export default function DashboardPage() {
                 </p>
               )}
             </div>
+          </div>
+          <div className="mt-3 flex justify-end">
+            <button
+              type="button"
+              onClick={() => {
+                setShowExportModal(true);
+                setExportResult(null);
+                setExportError('');
+              }}
+              disabled={!dataLoaded || exportPayload.codigos2026.length === 0}
+              className="rounded-md border border-blue-800 bg-blue-800 text-white text-sm font-semibold px-3 py-2 hover:bg-blue-900 disabled:bg-gray-300 disabled:border-gray-300 disabled:cursor-not-allowed"
+            >
+              Exportar datos
+            </button>
           </div>
         </section>
 
@@ -929,6 +1116,118 @@ export default function DashboardPage() {
           </div>
         </section>
       </main>
+
+      {showExportModal && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-40" onClick={() => { if (!exportBusy) setShowExportModal(false); }}>
+          <div className="w-[92%] max-w-3xl bg-white rounded-lg shadow-xl border border-gray-200" onClick={e => e.stopPropagation()}>
+            <div className="px-4 py-3 border-b border-gray-200 flex items-center justify-between">
+              <h3 className="text-sm font-bold text-gray-800">Resumen de exportación</h3>
+              <button
+                type="button"
+                onClick={() => setShowExportModal(false)}
+                disabled={exportBusy}
+                className="text-sm text-gray-500 hover:text-gray-700 disabled:text-gray-300 disabled:cursor-not-allowed"
+              >Cerrar</button>
+            </div>
+            <div className="p-4 space-y-3">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-2 text-sm">
+                <div className="bg-gray-50 border border-gray-200 rounded p-2">
+                  <p className="text-gray-500 text-xs">Seleccionados 2026</p>
+                  <p className="font-semibold text-gray-800">{programas2026Export.length}</p>
+                </div>
+                <div className="bg-gray-50 border border-gray-200 rounded p-2">
+                  <p className="text-gray-500 text-xs">Seleccionados 2025</p>
+                  <p className="font-semibold text-gray-800">{programas2025Export.length}</p>
+                </div>
+                <div className="bg-gray-50 border border-gray-200 rounded p-2">
+                  <p className="text-gray-500 text-xs">Fecha consulta</p>
+                  <p className="font-semibold text-gray-800">{fechaConsulta}</p>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
+                <div className="border border-gray-200 rounded p-2">
+                  <p className="font-semibold text-gray-700 mb-1">Programas 2026</p>
+                  <div className="max-h-28 overflow-y-auto space-y-0.5">
+                    {programas2026Export.map(p => (
+                      <p key={`exp26-${p.codigo}`} className="text-gray-600 truncate" title={`${p.codigo} - ${p.nombre}`}>{p.nombre}</p>
+                    ))}
+                  </div>
+                </div>
+                <div className="border border-gray-200 rounded p-2">
+                  <p className="font-semibold text-gray-700 mb-1">Programas 2025</p>
+                  <div className="max-h-28 overflow-y-auto space-y-0.5">
+                    {programas2025Export.map(p => (
+                      <p key={`exp25-${p.codigo}`} className="text-gray-600 truncate" title={`${p.codigo} - ${p.nombre}`}>{p.nombre}</p>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <p className="text-xs font-semibold text-gray-700">Respuesta endpoint</p>
+                  <button
+                    type="button"
+                    onClick={() => void enviarExportacion()}
+                    disabled={exportBusy}
+                    className="text-xs rounded border border-blue-700 text-blue-700 px-2 py-1 hover:bg-blue-50 disabled:text-gray-400 disabled:border-gray-300 disabled:cursor-not-allowed"
+                  >
+                    Enviar
+                  </button>
+                </div>
+
+                {exportResult ? (
+                  <div className="space-y-2">
+                    <p className={`text-xs ${exportResult.ok ? 'text-green-700' : 'text-red-700'}`}>
+                      {exportResult.message} (status {exportResult.status})
+                    </p>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                      <button
+                        type="button"
+                        onClick={() => { if (exportResult.ruta2025) void descargarCsv(exportResult.ruta2025, '2025'); }}
+                        disabled={!exportResult.ruta2025 || exportBusy}
+                        className="rounded border border-emerald-700 text-emerald-700 px-3 py-2 text-sm font-semibold hover:bg-emerald-50 disabled:text-gray-400 disabled:border-gray-300 disabled:cursor-not-allowed"
+                      >
+                        Descargar CSV 2025
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => { if (exportResult.ruta2026) void descargarCsv(exportResult.ruta2026, '2026'); }}
+                        disabled={!exportResult.ruta2026 || exportBusy}
+                        className="rounded border border-indigo-700 text-indigo-700 px-3 py-2 text-sm font-semibold hover:bg-indigo-50 disabled:text-gray-400 disabled:border-gray-300 disabled:cursor-not-allowed"
+                      >
+                        Descargar CSV 2026
+                      </button>
+                    </div>
+
+                    {exportError && (
+                      <p className="text-xs text-amber-700">{exportError}</p>
+                    )}
+                  </div>
+                ) : (
+                  <p className="text-xs text-gray-500">Sin respuesta todavía.</p>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {exportBusy && (
+        <div className="fixed inset-0 bg-white/70 backdrop-blur-sm flex items-center justify-center z-[60]">
+          <div className="flex items-center gap-3 bg-white px-6 py-4 rounded-xl shadow-lg border border-gray-200">
+            <svg className="animate-spin h-6 w-6 text-blue-800" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+            </svg>
+            <span className="text-sm font-medium text-gray-700">
+              {exportSending ? 'Enviando solicitud...' : `Descargando CSV ${downloadingTipo}...`}
+            </span>
+          </div>
+        </div>
+      )}
 
       {/* Processing overlay */}
       {(processing || loading) && (
