@@ -120,6 +120,7 @@ interface Par2025Option {
 interface Par2025DropdownProps {
   opciones: Par2025Option[];
   seleccionado: string;
+  automaticoInfo: Par2025Option | null;
   disabled?: boolean;
   onChange: (codigo: string) => void;
 }
@@ -206,7 +207,7 @@ function ProgramaDropdown({ programas, seleccionados, onChange }: ProgramaDropdo
   );
 }
 
-function Par2025Dropdown({ opciones, seleccionado, disabled = false, onChange }: Par2025DropdownProps) {
+function Par2025Dropdown({ opciones, seleccionado, automaticoInfo, disabled = false, onChange }: Par2025DropdownProps) {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState('');
   const ref = useRef<HTMLDivElement>(null);
@@ -229,11 +230,21 @@ function Par2025Dropdown({ opciones, seleccionado, disabled = false, onChange }:
     ? opciones.find(op => op.codigo === seleccionado)
     : null;
 
+  const fmtFecha = (iso: string | null) => {
+    if (!iso) return '';
+    const [y, m, d] = iso.split('-');
+    return `${d}/${m}/${y}`;
+  };
+
+  const automaticoLabel = automaticoInfo
+    ? `Par automático`
+    : 'Par automático';
+
   const displayLabel = disabled
     ? 'Selecciona 1 programa 2026'
     : seleccionadoObj
       ? seleccionadoObj.nombre
-      : 'Par automático';
+      : automaticoLabel;
 
   const hasSelection = !disabled && !!seleccionadoObj;
 
@@ -272,7 +283,7 @@ function Par2025Dropdown({ opciones, seleccionado, disabled = false, onChange }:
                 checked={seleccionado === ''}
                 onChange={() => seleccionar('')}
               />
-              <span className="truncate flex-1 cursor-pointer" onClick={() => seleccionar('')}>Par automático</span>
+              <span className="truncate flex-1 cursor-pointer" onClick={() => seleccionar('')}>{automaticoLabel}</span>
             </div>
             {filtrados.map(op => (
               <div key={op.codigo} className="group flex items-center gap-2 px-1 py-0.5 rounded hover:bg-gray-50 text-xs">
@@ -398,6 +409,20 @@ export default function DashboardPage() {
 
     return [...opciones.values()].sort((a, b) => a.nombre.localeCompare(b.nombre));
   }, [dataLoaded]);
+
+  const parAutomaticoInfo = useMemo<Par2025Option | null>(() => {
+    if (!dataLoaded || programasSeleccionados.length !== 1) return null;
+    const codigo2026 = programasSeleccionados[0];
+    const codigo2025 = DataService.buscarPar(codigo2026);
+    if (!codigo2025) return null;
+
+    const prog2025 = DataService.getPrograma(codigo2025, 2025);
+    return {
+      codigo: codigo2025,
+      nombre: String(prog2025?.['programa.nombre'] || codigo2025),
+      inauguracion: (prog2025?.[CONFIG.campos.inauguracion] as string) || null,
+    };
+  }, [dataLoaded, programasSeleccionados]);
 
   // Clean selections when filters change
   useEffect(() => {
@@ -743,6 +768,7 @@ export default function DashboardPage() {
               <Par2025Dropdown
                 opciones={pares2025Opciones}
                 seleccionado={codigoPar2025Seleccionado}
+                automaticoInfo={parAutomaticoInfo}
                 disabled={programasSeleccionados.length !== 1}
                 onChange={(codigo) => {
                   if (codigo === codigoPar2025Seleccionado) return;
@@ -750,6 +776,11 @@ export default function DashboardPage() {
                   setTimeout(() => setCodigoPar2025Seleccionado(codigo), 0);
                 }}
               />
+              {programasSeleccionados.length === 1 && parAutomaticoInfo && (
+                <p className="text-xs text-gray-500 mt-1 truncate" title={`${parAutomaticoInfo.nombre}${parAutomaticoInfo.inauguracion ? ` (inaug. ${fmtFecha(parAutomaticoInfo.inauguracion)})` : ''}`}>
+                  Par Automático: {parAutomaticoInfo.nombre}{parAutomaticoInfo.inauguracion ? ` (inaug. ${fmtFecha(parAutomaticoInfo.inauguracion)})` : ''}
+                </p>
+              )}
             </div>
           </div>
         </section>
