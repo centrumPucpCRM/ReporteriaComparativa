@@ -136,14 +136,19 @@ function proyectar(metricas2026: DataRow[], metricas2025: DataRow[], metrica: st
   return { labels, proyeccion, serie2025Futuro };
 }
 
-function generarComparativa(codigoCrm2026: string, metrica: string, extraDias = 0): Comparativa | null {
+function generarComparativa(
+  codigoCrm2026: string,
+  metrica: string,
+  extraDias = 0,
+  codigoCrm2025Seleccionado: string | null = null
+): Comparativa | null {
   const prog2026 = DataService.getPrograma(codigoCrm2026, 2026);
   if (!prog2026) return null;
 
   const inaug2026 = prog2026[CONFIG.campos.inauguracion] as string;
   if (!inaug2026) return null;
 
-  const codigoCrm2025 = DataService.buscarPar(codigoCrm2026);
+  const codigoCrm2025 = codigoCrm2025Seleccionado || DataService.buscarPar(codigoCrm2026);
   const prog2025 = codigoCrm2025 ? DataService.getPrograma(codigoCrm2025, 2025) : null;
   const inaug2025 = prog2025 ? (prog2025[CONFIG.campos.inauguracion] as string) : null;
 

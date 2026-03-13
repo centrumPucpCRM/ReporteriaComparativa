@@ -111,6 +111,19 @@ interface ProgramaDropdownProps {
   onChange: (sel: string[]) => void;
 }
 
+interface Par2025Option {
+  codigo: string;
+  nombre: string;
+  inauguracion: string | null;
+}
+
+interface Par2025DropdownProps {
+  opciones: Par2025Option[];
+  seleccionado: string;
+  disabled?: boolean;
+  onChange: (codigo: string) => void;
+}
+
 function ProgramaDropdown({ programas, seleccionados, onChange }: ProgramaDropdownProps) {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState('');
@@ -193,7 +206,103 @@ function ProgramaDropdown({ programas, seleccionados, onChange }: ProgramaDropdo
   );
 }
 
+function Par2025Dropdown({ opciones, seleccionado, disabled = false, onChange }: Par2025DropdownProps) {
+  const [open, setOpen] = useState(false);
+  const [search, setSearch] = useState('');
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener('click', handler);
+    return () => document.removeEventListener('click', handler);
+  }, []);
+
+  const lower = search.toLowerCase();
+  const filtrados = opciones.filter(op => {
+    if (!lower) return true;
+    return op.nombre.toLowerCase().includes(lower) || op.codigo.toLowerCase().includes(lower);
+  });
+
+  const seleccionadoObj = seleccionado
+    ? opciones.find(op => op.codigo === seleccionado)
+    : null;
+
+  const displayLabel = disabled
+    ? 'Selecciona 1 programa 2026'
+    : seleccionadoObj
+      ? seleccionadoObj.nombre
+      : 'Par automático';
+
+  const hasSelection = !disabled && !!seleccionadoObj;
+
+  const seleccionar = (codigo: string) => {
+    onChange(codigo);
+    setOpen(false);
+  };
+
+  return (
+    <div ref={ref} className="relative">
+      <button type="button"
+        onClick={(e) => { e.stopPropagation(); if (!disabled) setOpen(!open); }}
+        disabled={disabled}
+        className={`w-full text-left rounded-md border shadow-sm text-sm p-2 bg-white flex items-center justify-between hover:border-gray-400 disabled:bg-gray-100 disabled:text-gray-400 disabled:cursor-not-allowed ${hasSelection ? 'border-blue-600 bg-blue-50' : 'border-gray-300'}`}
+      >
+        <span className="truncate">{displayLabel}</span>
+        <svg className="w-4 h-4 text-gray-400 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
+      </button>
+      {open && (
+        <div className="absolute left-0 right-0 z-20 mt-1 w-full bg-white border border-gray-200 rounded-md shadow-lg" onClick={e => e.stopPropagation()}>
+          <div className="p-2 border-b border-gray-100">
+            <input
+              type="text"
+              placeholder="Buscar par 2025..."
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              className="w-full text-xs border border-gray-200 rounded px-2 py-1"
+              autoFocus
+            />
+          </div>
+          <div className="max-h-64 overflow-y-auto p-2 space-y-1">
+            <div className="group flex items-center gap-2 px-1 py-0.5 rounded hover:bg-gray-50 text-xs border-b border-gray-100 pb-1 mb-1">
+              <input
+                type="radio"
+                className="border-gray-300 cursor-pointer shrink-0"
+                checked={seleccionado === ''}
+                onChange={() => seleccionar('')}
+              />
+              <span className="truncate flex-1 cursor-pointer" onClick={() => seleccionar('')}>Par automático</span>
+            </div>
+            {filtrados.map(op => (
+              <div key={op.codigo} className="group flex items-center gap-2 px-1 py-0.5 rounded hover:bg-gray-50 text-xs">
+                <input
+                  type="radio"
+                  className="border-gray-300 cursor-pointer shrink-0"
+                  checked={seleccionado === op.codigo}
+                  onChange={() => seleccionar(op.codigo)}
+                />
+                <span className="truncate flex-1 cursor-pointer" onClick={() => seleccionar(op.codigo)} title={`${op.codigo} - ${op.nombre}`}>
+                  {op.nombre}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => seleccionar(op.codigo)}
+                  className="hidden group-hover:inline text-[11px] text-blue-700 hover:text-blue-900 shrink-0 font-semibold bg-blue-50 hover:bg-blue-100 px-2 py-0.5 rounded border border-blue-200"
+                >Seleccionar</button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function DashboardPage() {
+  const LOAD_TIMEOUT_MS = 45000;
+  const PROCESSING_TIMEOUT_MS = 15000;
+
   const [loading, setLoading] = useState(true);
   const [dataLoaded, setDataLoaded] = useState(false);
   const [dataStatus, setDataStatus] = useState('');
@@ -203,6 +312,8 @@ export default function DashboardPage() {
     return init;
   });
   const [programasSeleccionados, setProgramasSeleccionados] = useState<string[]>([]);
+  const [codigoPar2025Seleccionado, setCodigoPar2025Seleccionado] = useState('');
+  const [codigoPrograma2026ActivoPar, setCodigoPrograma2026ActivoPar] = useState('');
   const [metrica, setMetrica] = useState('total_convertidos');
   const [fechaConsulta, setFechaConsulta] = useState(() => new Date().toISOString().slice(0, 10));
   const [modo, setModo] = useState<'alumnos' | 'pxq'>('alumnos');
@@ -223,9 +334,17 @@ export default function DashboardPage() {
 
   // Load data (reload when mode changes since CSVs are different for alumnos vs pxq)
   useEffect(() => {
+    let active = true;
     setDataLoaded(false);
     setLoading(true);
+    const timeoutId = window.setTimeout(() => {
+      if (!active) return;
+      setDataStatus('Timeout al cargar datos');
+      setLoading(false);
+    }, LOAD_TIMEOUT_MS);
+
     DataService.cargarTodo().then(() => {
+      if (!active) return;
       const s = DataService.store;
       setDataStatus(
         `${s.datamart2025.length.toLocaleString()} filas 2025 · ${s.datamart2026.length.toLocaleString()} filas 2026 · ${DataService.getParesValidos().length} pares`
@@ -233,11 +352,28 @@ export default function DashboardPage() {
       setDataLoaded(true);
       setLoading(false);
     }).catch(err => {
+      if (!active) return;
       console.error('Error cargando datos:', err);
       setDataStatus('Error al cargar datos');
       setLoading(false);
+    }).finally(() => {
+      window.clearTimeout(timeoutId);
     });
+
+    return () => {
+      active = false;
+      window.clearTimeout(timeoutId);
+    };
   }, [modo]);
+
+  // Safety net: never keep the processing overlay forever.
+  useEffect(() => {
+    if (!processing) return;
+    const id = window.setTimeout(() => {
+      setProcessing(false);
+    }, PROCESSING_TIMEOUT_MS);
+    return () => window.clearTimeout(id);
+  }, [processing, PROCESSING_TIMEOUT_MS]);
 
   // Get filtered programs (memoized)
   const programasFiltrados = useMemo(
@@ -245,6 +381,23 @@ export default function DashboardPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [dataLoaded, JSON.stringify(filtrosActivos)]
   );
+
+  const pares2025Opciones = useMemo<Par2025Option[]>(() => {
+    if (!dataLoaded) return [];
+
+    const opciones = new Map<string, Par2025Option>();
+    DataService.store.programas2025.forEach(programa => {
+      const codigo = String(programa[CONFIG.campos.codigoCrm] || '').trim();
+      if (!codigo || opciones.has(codigo)) return;
+      opciones.set(codigo, {
+        codigo,
+        nombre: String(programa['programa.nombre'] || codigo),
+        inauguracion: (programa[CONFIG.campos.inauguracion] as string) || null,
+      });
+    });
+
+    return [...opciones.values()].sort((a, b) => a.nombre.localeCompare(b.nombre));
+  }, [dataLoaded]);
 
   // Clean selections when filters change
   useEffect(() => {
@@ -256,6 +409,37 @@ export default function DashboardPage() {
       return filtered;
     });
   }, [dataLoaded, programasFiltrados]);
+
+  useEffect(() => {
+    if (!dataLoaded || programasSeleccionados.length !== 1) {
+      setCodigoPar2025Seleccionado(prev => (prev ? '' : prev));
+      setCodigoPrograma2026ActivoPar('');
+      return;
+    }
+
+    const codigo2026 = programasSeleccionados[0];
+
+    if (codigoPrograma2026ActivoPar !== codigo2026) {
+      setCodigoPrograma2026ActivoPar(codigo2026);
+      setCodigoPar2025Seleccionado('');
+      return;
+    }
+
+    const codigoParPorDefecto = DataService.buscarPar(codigo2026) || '';
+    const actualEsValido = codigoPar2025Seleccionado
+      ? pares2025Opciones.some(op => op.codigo === codigoPar2025Seleccionado)
+      : true;
+
+    if (actualEsValido) return;
+
+    const fallback = pares2025Opciones.some(op => op.codigo === codigoParPorDefecto)
+      ? codigoParPorDefecto
+      : (pares2025Opciones[0]?.codigo || '');
+
+    if (fallback !== codigoPar2025Seleccionado) {
+      setCodigoPar2025Seleccionado(fallback);
+    }
+  }, [dataLoaded, programasSeleccionados, pares2025Opciones, codigoPar2025Seleccionado, codigoPrograma2026ActivoPar]);
 
   const handleFiltroChange = useCallback((campo: string, valores: string[]) => {
     setProcessing(true);
@@ -271,6 +455,8 @@ export default function DashboardPage() {
       FILTROS.forEach(f => { init[f.campo] = []; });
       setFiltrosActivos(init);
       setProgramasSeleccionados([]);
+      setCodigoPar2025Seleccionado('');
+      setCodigoPrograma2026ActivoPar('');
     }, 0);
   }, []);
 
@@ -293,6 +479,10 @@ export default function DashboardPage() {
       return { kpiState: { ...defaultKpiState }, comparativa: null, comparativaLeads: null, metricaLabel };
     }
 
+    const codigoPar2025Override = (codigos.length === 1 && codigoPar2025Seleccionado)
+      ? codigoPar2025Seleccionado
+      : null;
+
     let inaugRef2026: string | null = null;
     codigos.forEach(cod => {
       const prog = DataService.getPrograma(cod, 2026);
@@ -310,7 +500,7 @@ export default function DashboardPage() {
     }
 
     const comparativa = codigos.length === 1
-      ? CompareEngine.generarComparativa(codigos[0], metrica, extraDias)
+      ? CompareEngine.generarComparativa(codigos[0], metrica, extraDias, codigoPar2025Override)
       : CompareEngine.generarComparativaMultiple(codigos, metrica, extraDias);
 
     if (!comparativa) {
@@ -322,7 +512,7 @@ export default function DashboardPage() {
 
     const comparativaLeads = CONFIG._modo !== 'pxq'
       ? (codigos.length === 1
-          ? CompareEngine.generarComparativa(codigos[0], 'total_leads', extraDias)
+          ? CompareEngine.generarComparativa(codigos[0], 'total_leads', extraDias, codigoPar2025Override)
           : CompareEngine.generarComparativaMultiple(codigos, 'total_leads', extraDias))
       : null;
 
@@ -334,7 +524,7 @@ export default function DashboardPage() {
     const getComparativaMetrica = (metricaKey: string) => {
       if (comparativasPorMetrica[metricaKey]) return comparativasPorMetrica[metricaKey];
       const comp = codigos.length === 1
-        ? CompareEngine.generarComparativa(codigos[0], metricaKey, extraDias)
+        ? CompareEngine.generarComparativa(codigos[0], metricaKey, extraDias, codigoPar2025Override)
         : CompareEngine.generarComparativaMultiple(codigos, metricaKey, extraDias);
       comparativasPorMetrica[metricaKey] = comp;
       return comp;
@@ -355,7 +545,12 @@ export default function DashboardPage() {
       return suma > 0 ? suma : null;
     };
 
-    const codigos2025 = codigos.map(c => DataService.buscarPar(c)).filter(Boolean) as string[];
+    const codigo2025Unico = codigos.length === 1
+      ? (codigoPar2025Override || DataService.buscarPar(codigos[0]))
+      : null;
+    const codigos2025 = codigos.length === 1
+      ? (codigo2025Unico ? [codigo2025Unico] : [])
+      : codigos.map(c => DataService.buscarPar(c)).filter(Boolean) as string[];
     const meta2026 = calcularMeta(codigos, 2026);
     const meta2025 = calcularMeta(codigos2025, 2025);
 
@@ -431,7 +626,7 @@ export default function DashboardPage() {
       metricaLabel,
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dataLoaded, programasSeleccionados, programasFiltrados, metrica, fechaConsulta, modo, JSON.stringify(filtrosActivos)]);
+  }, [dataLoaded, programasSeleccionados, programasFiltrados, codigoPar2025Seleccionado, metrica, fechaConsulta, modo, JSON.stringify(filtrosActivos)]);
 
   // Derived KPI state (no useState needed)
   const kpiState = comparativaData?.kpiState || defaultKpiState;
@@ -532,8 +727,8 @@ export default function DashboardPage() {
 
         {/* Selector de programa + par */}
         <section className="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <div className="md:col-span-2">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">
                 Programas 2026 <span className="text-xs text-gray-400 font-normal">({programasFiltrados.length})</span>
               </label>
@@ -545,9 +740,16 @@ export default function DashboardPage() {
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Pares 2025</label>
-              <div className="text-sm text-gray-700 p-2 bg-gray-50 rounded-md border border-gray-200 min-h-[38px] flex items-center">
-                {kpiState.parInfo}
-              </div>
+              <Par2025Dropdown
+                opciones={pares2025Opciones}
+                seleccionado={codigoPar2025Seleccionado}
+                disabled={programasSeleccionados.length !== 1}
+                onChange={(codigo) => {
+                  if (codigo === codigoPar2025Seleccionado) return;
+                  setProcessing(true);
+                  setTimeout(() => setCodigoPar2025Seleccionado(codigo), 0);
+                }}
+              />
             </div>
           </div>
         </section>
