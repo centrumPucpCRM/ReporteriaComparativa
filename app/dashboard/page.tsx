@@ -877,6 +877,17 @@ export default function DashboardPage() {
     ? ` ${kpiState.diasParaInaug > 0 ? '-' : '+'}${Math.abs(kpiState.diasParaInaug)}d`
     : '';
 
+  const calcFechaOffset = (inaugIso: string | null, dias: number | null): string => {
+    if (!inaugIso || dias == null) return '';
+    const d = new Date(inaugIso + 'T00:00:00');
+    d.setDate(d.getDate() - dias);
+    const dd = String(d.getDate()).padStart(2, '0');
+    const mm = String(d.getMonth() + 1).padStart(2, '0');
+    return `${dd}/${mm}/${d.getFullYear()}`;
+  };
+  const fechaOffset2026 = calcFechaOffset(kpiState.inaug2026, kpiState.diasParaInaug);
+  const fechaOffset2025 = calcFechaOffset(kpiState.inaug2025, kpiState.diasParaInaug);
+
   return (
     <div className="bg-gray-50 min-h-screen">
       {/* Header */}
@@ -980,7 +991,7 @@ export default function DashboardPage() {
               <p className="text-xs text-gray-900 uppercase tracking-wide font-bold">2026</p>
               {kpiState.inaug2026 && (
                 <span className="text-xs text-gray-600">
-                  (<b>Inaug: {fmtFecha(kpiState.inaug2026)}{inaugOffsetStr}</b>)
+                  (<b>Inaug: {fmtFecha(kpiState.inaug2026)}{inaugOffsetStr}{fechaOffset2026 ? ` | ${fechaOffset2026}` : ''}</b>)
                 </span>
               )}
             </div>
@@ -1036,7 +1047,7 @@ export default function DashboardPage() {
               <p className="text-xs text-gray-900 uppercase tracking-wide font-bold">2025</p>
               {kpiState.inaug2025 && (
                 <span className="text-xs text-gray-600">
-                  (<b>Inaug: {fmtFecha(kpiState.inaug2025)}{inaugOffsetStr}</b>)
+                  (<b>Inaug: {fmtFecha(kpiState.inaug2025)}{inaugOffsetStr}{fechaOffset2025 ? ` | ${fechaOffset2025}` : ''}</b>)
                 </span>
               )}
             </div>
