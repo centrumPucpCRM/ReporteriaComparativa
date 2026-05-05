@@ -57,7 +57,7 @@ function FilterDropdown({ campo, label, filtrosActivos, onFiltroChange }: Filter
         onClick={(e) => { e.stopPropagation(); setOpen(!open); }}
         className={`w-full text-left rounded-md border shadow-sm text-sm p-2 bg-white flex items-center justify-between hover:border-gray-400 ${hasSelection ? 'border-blue-600 bg-blue-50' : 'border-gray-300'}`}
       >
-        <span className="truncate">{displayLabel}</span>
+        <span className="truncate text-gray-900 font-semibold">{displayLabel}</span>
         <svg className="w-4 h-4 text-gray-400 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
       </button>
       {open && (
@@ -166,7 +166,7 @@ function ProgramaDropdown({ programas, seleccionados, onChange }: ProgramaDropdo
         onClick={(e) => { e.stopPropagation(); setOpen(!open); }}
         className={`w-full text-left rounded-md border shadow-sm text-sm p-2 bg-white flex items-center justify-between hover:border-gray-400 ${hasSelection ? 'border-blue-600 bg-blue-50' : 'border-gray-300'}`}
       >
-        <span className="truncate">{displayLabel}</span>
+        <span className="truncate text-gray-900 font-semibold">{displayLabel}</span>
         <svg className="w-4 h-4 text-gray-400 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
       </button>
       {open && (
@@ -264,7 +264,7 @@ function Par2025Dropdown({ opciones, seleccionado, automaticoInfo, disabled = fa
         disabled={disabled}
         className={`w-full text-left rounded-md border shadow-sm text-sm p-2 bg-white flex items-center justify-between hover:border-gray-400 disabled:bg-gray-100 disabled:text-gray-400 disabled:cursor-not-allowed ${hasSelection ? 'border-blue-600 bg-blue-50' : 'border-gray-300'}`}
       >
-        <span className="truncate">{displayLabel}</span>
+        <span className="truncate text-gray-900 font-semibold">{displayLabel}</span>
         <svg className="w-4 h-4 text-gray-400 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
       </button>
       {open && (
