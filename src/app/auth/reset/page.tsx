@@ -31,21 +31,67 @@ export default function ResetPasswordPage() {
       window.history.replaceState(null, "", "/auth/reset");
     };
 
+    const failWith = (msg: string) => {
+      setStatus("error");
+      setError(msg);
+    };
+
     async function init() {
+      const hasUrlToken =
+        (tokenHash && typeParam) || (accessToken && refreshToken) || !!code;
+
+      // CRÍTICO: si el link del email trae token, primero limpiamos cualquier
+      // sesión preexistente (cookies del usuario logueado en otro tab del mismo
+      // navegador). Sin esto, verifyOtp se "mezcla" con la sesión vieja y
+      // updateUser termina apuntando al usuario equivocado o no persistiendo.
+      if (hasUrlToken) {
+        await supabase.auth.signOut({ scope: "local" });
+      }
+
       // 1) token_hash (cross-browser, recomendado).
       if (tokenHash && typeParam === "recovery") {
         const { error: otpErr } = await supabase.auth.verifyOtp({
           token_hash: tokenHash,
           type: "recovery",
         });
-        if (!otpErr) {
-          cleanUrl();
-          setStatus("ready");
+        if (otpErr) {
+          failWith("El enlace es inválido o expiró.");
           return;
         }
+        cleanUrl();
+        setStatus("ready");
+        return;
       }
 
-      // 2) Sesión ya seteada por /auth/callback antes de redirigir acá.
+      // 2) Hash fragment legacy (#access_token=...&refresh_token=...).
+      if (accessToken && refreshToken) {
+        const { error: sessErr } = await supabase.auth.setSession({
+          access_token: accessToken,
+          refresh_token: refreshToken,
+        });
+        if (sessErr) {
+          failWith("El enlace es inválido o expiró.");
+          return;
+        }
+        cleanUrl();
+        setStatus("ready");
+        return;
+      }
+
+      // 3) PKCE code (mismo navegador).
+      if (code) {
+        const { error: codeErr } = await supabase.auth.exchangeCodeForSession(code);
+        if (codeErr) {
+          failWith("El enlace es inválido o expiró.");
+          return;
+        }
+        cleanUrl();
+        setStatus("ready");
+        return;
+      }
+
+      // 4) Sin token en URL: única vía válida es venir redirigido desde
+      //    /auth/callback (que ya hizo verifyOtp server-side y seteó cookies).
       const { data: { session } } = await supabase.auth.getSession();
       if (session) {
         cleanUrl();
@@ -53,31 +99,7 @@ export default function ResetPasswordPage() {
         return;
       }
 
-      // 3) Hash fragment legacy (#access_token=...&refresh_token=...).
-      if (accessToken && refreshToken) {
-        const { error: sessErr } = await supabase.auth.setSession({
-          access_token: accessToken,
-          refresh_token: refreshToken,
-        });
-        if (!sessErr) {
-          cleanUrl();
-          setStatus("ready");
-          return;
-        }
-      }
-
-      // 4) PKCE code (mismo navegador) — fallback final.
-      if (code) {
-        const { error: codeErr } = await supabase.auth.exchangeCodeForSession(code);
-        if (!codeErr) {
-          cleanUrl();
-          setStatus("ready");
-          return;
-        }
-      }
-
-      setStatus("error");
-      setError("El enlace es inválido o expiró.");
+      failWith("El enlace es inválido o expiró.");
     }
 
     init();
