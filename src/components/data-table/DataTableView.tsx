@@ -100,32 +100,43 @@ export default function DataTableView({ config, actions }: Props) {
     setFilterInputs((prev) => {
       const next = { ...prev };
       const existing = next[col.key];
+
       if (col.type === "text") {
-        const merged = {
-          type: "text" as const,
-          contains: "",
-          ...(existing?.type === "text" ? existing : {}),
-          ...partial,
-        };
-        if (!merged.contains) delete next[col.key];
-        else next[col.key] = merged;
+        const p = partial as { contains?: string };
+        const contains =
+          p.contains !== undefined
+            ? p.contains
+            : existing?.type === "text"
+              ? existing.contains
+              : "";
+        if (!contains) delete next[col.key];
+        else next[col.key] = { type: "text", contains };
       } else if (col.type === "number") {
-        const merged = {
-          type: "number" as const,
-          equals: "",
-          ...(existing?.type === "number" ? existing : {}),
-          ...partial,
-        };
-        if (!merged.equals) delete next[col.key];
-        else next[col.key] = merged;
+        const p = partial as { equals?: string };
+        const equals =
+          p.equals !== undefined
+            ? p.equals
+            : existing?.type === "number"
+              ? existing.equals
+              : "";
+        if (!equals) delete next[col.key];
+        else next[col.key] = { type: "number", equals };
       } else {
-        const merged = {
-          type: "datetime" as const,
-          ...(existing?.type === "datetime" ? existing : {}),
-          ...partial,
-        };
-        if (!merged.from && !merged.to) delete next[col.key];
-        else next[col.key] = merged;
+        const p = partial as { from?: string; to?: string };
+        const from =
+          p.from !== undefined
+            ? p.from
+            : existing?.type === "datetime"
+              ? existing.from
+              : undefined;
+        const to =
+          p.to !== undefined
+            ? p.to
+            : existing?.type === "datetime"
+              ? existing.to
+              : undefined;
+        if (!from && !to) delete next[col.key];
+        else next[col.key] = { type: "datetime", from, to };
       }
       return next;
     });
