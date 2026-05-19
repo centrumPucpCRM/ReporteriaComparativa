@@ -2,7 +2,8 @@
 
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { createClient } from "@/utils/supabase/client";
+import Link from "next/link";
+import { createClient } from "@/lib/supabase/client";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -120,6 +121,13 @@ export default function LoginPage() {
           >
             {loading ? "Entrando..." : "Entrar"}
           </button>
+
+          <Link
+            href="/auth/forgot"
+            className="text-center text-sm text-zinc-600 underline-offset-4 hover:underline dark:text-zinc-300"
+          >
+            ¿Olvidaste tu contraseña?
+          </Link>
         </form>
       </div>
     </div>

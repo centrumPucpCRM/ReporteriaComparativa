@@ -1,11 +1,12 @@
 'use client';
 
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
+import Link from 'next/link';
 import CONFIG from './lib/config';
 import DataService from './lib/dataService';
 import CompareEngine, { type Comparativa } from './lib/compareEngine';
 import { renderizarChart, limpiarChart } from './lib/chartRenderer';
-import LogoutButton from '../components/LogoutButton';
+import LogoutButton from '@/components/LogoutButton';
 
 const FILTROS = [
   { campo: 'programa.sub_direccion', label: 'Sub Dirección' },
@@ -894,6 +895,16 @@ export default function DashboardPage() {
       <header className="bg-white shadow-sm border-b border-gray-200">
         <div className="max-w-7xl mx-auto px-4 py-4 flex items-center justify-between">
           <div className="flex items-center gap-3">
+            <Link
+              href="/modulos"
+              className="inline-flex items-center text-sm font-semibold text-gray-600 hover:text-gray-900"
+            >
+              <svg className="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+              </svg>
+              Módulos
+            </Link>
+            <span className="text-gray-300">/</span>
             <h1 className="text-xl font-bold text-gray-800">Comparativo de Programas</h1>
             <div className="flex items-center bg-gray-100 rounded-full p-0.5 text-xs font-semibold cursor-pointer select-none" style={{ minWidth: 140 }}>
               <span

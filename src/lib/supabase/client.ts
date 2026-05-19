@@ -24,5 +24,10 @@ export function createClient() {
     "NEXT_PUBLIC_SUPABASE_ANON_KEY"
   );
 
-  return createBrowserClient(supabaseUrl, supabaseAnonKey);
+  // flowType "implicit": evita que resetPasswordForEmail guarde un
+  // code_verifier en localStorage. Sin esto, abrir el email en otro
+  // navegador rompe el reset (PKCE necesita el verifier original).
+  return createBrowserClient(supabaseUrl, supabaseAnonKey, {
+    auth: { flowType: "implicit" },
+  });
 }
