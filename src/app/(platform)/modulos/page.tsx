@@ -18,8 +18,8 @@ const MODULOS = [
   {
     slug: "microservicios",
     titulo: "Microservicios",
-    subtitulo: "Próximamente",
-    descripcion: "Herramientas y utilidades operativas",
+    subtitulo: "Herramientas internas",
+    descripcion: "Sistema de vacaciones, Infobip Ext y más utilidades operativas.",
     color: "from-orange-500 to-amber-600",
     iconColor: "bg-orange-50 text-orange-600",
     icon: (
