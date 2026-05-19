@@ -149,61 +149,67 @@ export default function ApiDocsModal({ config, apiPath, onClose }: Props) {
 }
 
 function buildCode(tab: Tab, url: string, exampleBody: Record<string, unknown>): string {
-  const headers = `headers = {
-    "Authorization": "Bearer YOUR_API_KEY",
-    "Content-Type": "application/json",
-}`;
+  const debugTail = `print("Status:", r.status_code)
+print("Location:", r.headers.get("location"))
+print("Content-Type:", r.headers.get("content-type"))
+print("Body (primeros 300 chars):")
+print(r.text[:300])`;
+
+  const headers = `    headers={
+        "Authorization": "Bearer YOUR_API_KEY",
+        "Content-Type": "application/json",
+    },`;
 
   if (tab === "create") {
     return `import requests
 
-url = "${url}"
+r = requests.post(
+    "${url}",
 ${headers}
-data = ${pythonDict(exampleBody)}
-
-response = requests.post(url, headers=headers, json=data)
-response.raise_for_status()
-print(response.json())  # {"data": {...}}
+    json=${pythonDict(exampleBody)},
+    allow_redirects=False,
+)
+${debugTail}
 `;
   }
   if (tab === "list") {
     return `import requests
 
-url = "${url}"
+r = requests.get(
+    "${url}",
 ${headers}
-params = {"page": 1, "pageSize": 25}
-
-response = requests.get(url, headers=headers, params=params)
-response.raise_for_status()
-print(response.json())  # {"data": [...], "total": N, "page": 1, "pageSize": 25}
+    params={"page": 1, "pageSize": 25},
+    allow_redirects=False,
+)
+${debugTail}
 `;
   }
   if (tab === "update") {
     return `import requests
 
 row_id = 1  # reemplazá por el ID a editar
-url = f"${url}/{row_id}"
+r = requests.patch(
+    f"${url}/{row_id}",
 ${headers}
-data = ${pythonDict(exampleBody)}
-
-response = requests.patch(url, headers=headers, json=data)
-response.raise_for_status()
-print(response.json())  # {"data": {...}}
+    json=${pythonDict(exampleBody)},
+    allow_redirects=False,
+)
+${debugTail}
 `;
   }
   return `import requests
 
 row_id = 1  # reemplazá por el ID a eliminar
-url = f"${url}/{row_id}"
-${headers}
-
-response = requests.delete(url, headers=headers)
-response.raise_for_status()
-print(response.json())  # {"ok": true}
+r = requests.delete(
+    f"${url}/{row_id}",
+    headers={"Authorization": "Bearer YOUR_API_KEY"},
+    allow_redirects=False,
+)
+${debugTail}
 `;
 }
 
 function pythonDict(obj: Record<string, unknown>): string {
-  const entries = Object.entries(obj).map(([k, v]) => `    "${k}": ${v}`);
-  return `{\n${entries.join(",\n")},\n}`;
+  const entries = Object.entries(obj).map(([k, v]) => `        "${k}": ${v}`);
+  return `{\n${entries.join(",\n")},\n    }`;
 }
