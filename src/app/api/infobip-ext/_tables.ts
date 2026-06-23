@@ -9,14 +9,9 @@ export const TABLES = {
     table: "sender_last_rdv",
     primaryKey: "id",
   },
-  "sender-rdv-private-queue": {
+  "colas": {
     schema: "Infobip_ext",
-    table: "sender_rdv_private_queue",
-    primaryKey: "id",
-  },
-  "sender-general-queue": {
-    schema: "Infobip_ext",
-    table: "sender_general_queue",
+    table: "colas",
     primaryKey: "id",
   },
 } as const;

@@ -5,10 +5,10 @@ import type { TableConfig } from "@/components/data-table/types";
 import { createRow, listRows, removeRow, updateRow } from "./actions";
 
 const CONFIG: TableConfig = {
-  title: "Cola Privada de RDVs",
-  description: "Mapeo de senders a colas privadas para RDVs específicos.",
+  title: "Colas",
+  description: "Mapea cada NI (teléfono Infobip) a sus colas de Ingreso (IN) y General (GEN).",
   primaryKey: "id",
-  apiPath: "/api/infobip-ext/sender-rdv-private-queue",
+  apiPath: "/api/infobip-ext/colas",
   defaultSort: { key: "created_at", direction: "desc" },
   columns: [
     {
@@ -19,23 +19,31 @@ const CONFIG: TableConfig = {
       filterable: false,
     },
     {
-      key: "sender",
-      label: "Sender",
+      key: "ni",
+      label: "NI (Teléfono Infobip)",
       type: "text",
       required: true,
+      unique: true,
     },
     {
-      key: "rdv_id",
-      label: "RDV ID",
-      type: "number",
-      required: true,
+      key: "programa",
+      label: "Programa",
+      type: "text",
+      placeholder: 'Ej: "MBA y Executive"',
     },
     {
-      key: "private_queue_id",
-      label: "Cola Privada",
+      key: "ing_queue_id",
+      label: "Cola Ingreso (IN)",
       type: "text",
       required: true,
-      placeholder: "ID de la cola privada",
+      placeholder: "queueId de la cola ING",
+    },
+    {
+      key: "gen_queue_id",
+      label: "Cola General (GEN)",
+      type: "text",
+      required: true,
+      placeholder: "queueId de la cola GEN",
     },
     {
       key: "created_at",
@@ -46,7 +54,7 @@ const CONFIG: TableConfig = {
   ],
 };
 
-export default function SenderRdvPrivateQueuePage() {
+export default function ColasPage() {
   return (
     <DataTableView
       config={CONFIG}

@@ -5,7 +5,7 @@ import type { ListParams, RowData } from "@/components/data-table/types";
 
 const baseActions = createTableActions({
   schema: "Infobip_ext",
-  table: "sender_rdv_private_queue",
+  table: "colas",
   primaryKey: "id",
 });
 
