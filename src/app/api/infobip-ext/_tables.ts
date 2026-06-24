@@ -6,6 +6,13 @@ export type TableDef = {
   upsertOn?: string;
   /** Columna timestamp que el server sella con now() en cada escritura (insert/upsert). */
   touch?: string;
+  /**
+   * En upsert, descarta del payload las claves con valor null/undefined antes de
+   * escribir. Como PostgREST solo actualiza las columnas presentes en el payload,
+   * esto preserva el valor existente cuando el campo llega null/ausente
+   * (equivale a COALESCE(entrante, actual)).
+   */
+  preserveOnNull?: boolean;
 };
 
 export const TABLES = {
@@ -13,6 +20,9 @@ export const TABLES = {
     schema: "Infobip_ext",
     table: "conversation_lead_relation",
     primaryKey: "id",
+    upsertOn: "infobip_conversation_id",
+    touch: "updated_at",
+    preserveOnNull: true,
   },
   "sender-last-rdv": {
     schema: "Infobip_ext",

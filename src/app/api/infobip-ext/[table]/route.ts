@@ -71,12 +71,18 @@ export async function POST(req: NextRequest, { params }: Ctx) {
       return NextResponse.json({ error: "Body debe ser un objeto JSON." }, { status: 400 });
     }
 
-    // Sella la columna de "actualizado" (si la tabla lo declara) para que el
-    // timestamp se refresque también en updates de upsert (el default now() solo
-    // dispara en insert).
-    const payload: Record<string, unknown> = target.touch
-      ? { ...(body as Record<string, unknown>), [target.touch]: new Date().toISOString() }
-      : (body as Record<string, unknown>);
+    // Construye el payload:
+    //  - preserveOnNull: descarta claves null/undefined para que el upsert no pise
+    //    un valor existente con NULL (equivale a COALESCE(entrante, actual)).
+    //  - touch: sella la columna de "actualizado" con now(), porque el default
+    //    now() solo dispara en insert, no en el update del upsert.
+    const payload: Record<string, unknown> = { ...(body as Record<string, unknown>) };
+    if (target.preserveOnNull) {
+      for (const key of Object.keys(payload)) {
+        if (payload[key] === null || payload[key] === undefined) delete payload[key];
+      }
+    }
+    if (target.touch) payload[target.touch] = new Date().toISOString();
 
     const admin = createAdminClient();
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
