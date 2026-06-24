@@ -70,7 +70,7 @@ export async function POST(req: NextRequest) {
     const { data: ultimaAtencion, error: uaError } = await db
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       .from("sender_last_rdv" as any)
-      .select("last_rdv_id, lead_id, fecha_actualizacion")
+      .select("ultimo_rdv_number, lead_id, fecha_actualizacion")
       .eq("telefono_contacto", nt)
       .order("fecha_actualizacion", { ascending: false })
       .limit(1)
@@ -100,7 +100,7 @@ export async function POST(req: NextRequest) {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       lead_id: encontrado ? (ultimaAtencion as any).lead_id ?? null : null,
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      last_rdv_id: encontrado ? (ultimaAtencion as any).last_rdv_id ?? null : null,
+      ultimo_rdv_number: encontrado ? (ultimaAtencion as any).ultimo_rdv_number ?? null : null,
     });
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);

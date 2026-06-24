@@ -71,18 +71,33 @@ export async function POST(req: NextRequest, { params }: Ctx) {
       return NextResponse.json({ error: "Body debe ser un objeto JSON." }, { status: 400 });
     }
 
+    // Sella la columna de "actualizado" (si la tabla lo declara) para que el
+    // timestamp se refresque también en updates de upsert (el default now() solo
+    // dispara en insert).
+    const payload: Record<string, unknown> = target.touch
+      ? { ...(body as Record<string, unknown>), [target.touch]: new Date().toISOString() }
+      : (body as Record<string, unknown>);
+
     const admin = createAdminClient();
-    const { data, error } = await admin
-      .schema(target.schema)
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      .from(target.table as any)
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      .insert(body as any)
-      .select()
-      .single();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const tableRef = admin.schema(target.schema).from(target.table as any);
+
+    // UPSERT cuando la tabla declara `upsertOn` (ej. sender-last-rdv por
+    // telefono_contacto+sender); INSERT puro en el resto.
+    const { data, error } = target.upsertOn
+      ? await tableRef
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          .upsert(payload as any, { onConflict: target.upsertOn })
+          .select()
+          .single()
+      : await tableRef
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          .insert(payload as any)
+          .select()
+          .single();
     if (error) return NextResponse.json({ error: error.message }, { status: 400 });
 
-    return NextResponse.json({ data }, { status: 201 });
+    return NextResponse.json({ data }, { status: target.upsertOn ? 200 : 201 });
   } catch (e) {
     return serverError(e);
   }

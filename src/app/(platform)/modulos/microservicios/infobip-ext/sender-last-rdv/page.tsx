@@ -32,8 +32,8 @@ const CONFIG: TableConfig = {
       required: true,
     },
     {
-      key: "last_rdv_id",
-      label: "Último RDV ID",
+      key: "ultimo_rdv_number",
+      label: "Último RDV (party_number)",
       type: "number",
       required: true,
     },
