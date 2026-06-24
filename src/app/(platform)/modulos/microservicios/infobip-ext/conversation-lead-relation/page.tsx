@@ -35,6 +35,18 @@ const CONFIG: TableConfig = {
       placeholder: "ID del lead",
     },
     {
+      key: "sender",
+      label: "Sender",
+      type: "text",
+      placeholder: "Número Infobip emisor (opcional)",
+    },
+    {
+      key: "telefono_contacto",
+      label: "Teléfono Contacto",
+      type: "text",
+      placeholder: "Teléfono del cliente (opcional)",
+    },
+    {
       key: "created_at",
       label: "Creado",
       type: "datetime",
