@@ -30,9 +30,17 @@ export async function GET(req: NextRequest, { params }: Ctx) {
     );
     const offset = (page - 1) * pageSize;
 
+    const incompletos = ["true", "1", "yes"].includes(
+      (url.searchParams.get("incompletos") ?? "").toLowerCase(),
+    );
+
     const admin = createAdminClient();
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     let query = admin.schema(target.schema).from(target.table as any).select("*", { count: "exact" });
+    // ?incompletos=true → solo filas con alguna columna de completitud en NULL.
+    if (incompletos && target.incompleteColumns?.length) {
+      query = query.or(target.incompleteColumns.map((c) => `${c}.is.null`).join(","));
+    }
     query = query.order(target.primaryKey, { ascending: false });
     query = query.range(offset, offset + pageSize - 1);
 

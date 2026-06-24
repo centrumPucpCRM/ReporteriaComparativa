@@ -13,6 +13,12 @@ export type TableDef = {
    * (equivale a COALESCE(entrante, actual)).
    */
   preserveOnNull?: boolean;
+  /**
+   * Columnas cuya ausencia (IS NULL) marca la fila como "incompleta". Habilita el
+   * query param `?incompletos=true` en el GET, que devuelve solo filas con alguna
+   * de estas columnas en NULL.
+   */
+  incompleteColumns?: string[];
 };
 
 export const TABLES = {
@@ -23,6 +29,7 @@ export const TABLES = {
     upsertOn: "infobip_conversation_id",
     touch: "updated_at",
     preserveOnNull: true,
+    incompleteColumns: ["telefono_contacto", "sender"],
   },
   "sender-last-rdv": {
     schema: "Infobip_ext",
