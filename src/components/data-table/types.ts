@@ -25,6 +25,12 @@ export interface TableConfig {
   defaultPageSize?: number;
   /** Ruta del endpoint REST equivalente (ej: "/api/infobip-ext/<slug>"). Si está, muestra botón "API" en el header. */
   apiPath?: string;
+  /**
+   * Columnas cuya ausencia (IS NULL) marca la fila como "incompleta". Si está,
+   * el header muestra un botón "Solo incompletos" que filtra las filas con
+   * alguna de estas columnas en NULL.
+   */
+  incompleteColumns?: string[];
 }
 
 export type RowData = Record<string, unknown>;
@@ -39,6 +45,8 @@ export interface ListParams {
   pageSize: number;
   sort?: { key: string; direction: "asc" | "desc" };
   filters?: Record<string, FilterValue>;
+  /** Solo filas con alguna columna de completitud en NULL (ver TableConfig.incompleteColumns). */
+  onlyIncomplete?: boolean;
 }
 
 export interface ListResult {

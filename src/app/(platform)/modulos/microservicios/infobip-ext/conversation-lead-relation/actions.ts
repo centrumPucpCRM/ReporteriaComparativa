@@ -7,6 +7,7 @@ const baseActions = createTableActions({
   schema: "Infobip_ext",
   table: "conversation_lead_relation",
   primaryKey: "id",
+  incompleteColumns: ["telefono_contacto", "sender"],
 });
 
 export async function listRows(params: ListParams) {

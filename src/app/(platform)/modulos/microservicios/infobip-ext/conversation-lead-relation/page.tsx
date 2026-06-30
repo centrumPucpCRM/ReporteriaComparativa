@@ -10,6 +10,7 @@ const CONFIG: TableConfig = {
     "Relaciona cada conversación de Infobip con su lead correspondiente.",
   primaryKey: "id",
   apiPath: "/api/infobip-ext/conversation-lead-relation",
+  incompleteColumns: ["telefono_contacto", "sender"],
   defaultSort: { key: "id", direction: "desc" },
   columns: [
     {

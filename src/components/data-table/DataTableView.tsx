@@ -56,6 +56,7 @@ export default function DataTableView({ config, actions }: Props) {
   const [formError, setFormError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [showApiDocs, setShowApiDocs] = useState(false);
+  const [onlyIncomplete, setOnlyIncomplete] = useState(false);
 
   // Debounce filter inputs -> applied filters
   useEffect(() => {
@@ -70,7 +71,7 @@ export default function DataTableView({ config, actions }: Props) {
     setLoading(true);
     setError(null);
     try {
-      const params: ListParams = { page, pageSize, sort, filters };
+      const params: ListParams = { page, pageSize, sort, filters, onlyIncomplete };
       const result = await actions.list(params);
       setRows(result.rows);
       setTotal(result.total);
@@ -79,7 +80,7 @@ export default function DataTableView({ config, actions }: Props) {
     } finally {
       setLoading(false);
     }
-  }, [actions, page, pageSize, sort, filters]);
+  }, [actions, page, pageSize, sort, filters, onlyIncomplete]);
 
   useEffect(() => {
     load();
@@ -284,6 +285,25 @@ export default function DataTableView({ config, actions }: Props) {
           )}
         </div>
         <div className="flex items-center gap-2 shrink-0">
+          {config.incompleteColumns?.length ? (
+            <button
+              onClick={() => {
+                setOnlyIncomplete((v) => !v);
+                setPage(1);
+              }}
+              title="Filas con alguna columna obligatoria vacía"
+              className={`inline-flex items-center gap-2 rounded-md border px-3 py-2 text-sm font-semibold transition-colors ${
+                onlyIncomplete
+                  ? "border-amber-300 bg-amber-50 text-amber-800 hover:bg-amber-100"
+                  : "border-gray-200 bg-white text-gray-700 hover:bg-gray-50 hover:text-gray-900"
+              }`}
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M5.07 19h13.86c1.54 0 2.5-1.67 1.73-3L13.73 4a2 2 0 00-3.46 0L3.34 16c-.77 1.33.19 3 1.73 3z" />
+              </svg>
+              {onlyIncomplete ? "Mostrando incompletos" : "Solo incompletos"}
+            </button>
+          ) : null}
           {config.apiPath && (
             <button
               onClick={() => setShowApiDocs(true)}
@@ -365,9 +385,11 @@ export default function DataTableView({ config, actions }: Props) {
                     colSpan={visibleColumns.length + 1}
                     className="px-4 py-12 text-center text-sm text-gray-500"
                   >
-                    {activeFilterCount > 0
-                      ? "No hay resultados con los filtros aplicados."
-                      : "No hay filas todavía. Hacé clic en \"Nuevo\" para crear la primera."}
+                    {onlyIncomplete
+                      ? "No hay filas incompletas. 🎉"
+                      : activeFilterCount > 0
+                        ? "No hay resultados con los filtros aplicados."
+                        : "No hay filas todavía. Hacé clic en \"Nuevo\" para crear la primera."}
                   </td>
                 </tr>
               ) : (

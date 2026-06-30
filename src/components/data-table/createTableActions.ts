@@ -12,6 +12,8 @@ interface FactoryOptions {
   schema: string;
   table: string;
   primaryKey: string;
+  /** Columnas que, si alguna está en NULL, marcan la fila como incompleta (para el filtro "Solo incompletos"). */
+  incompleteColumns?: string[];
 }
 
 async function requireUser() {
@@ -48,7 +50,7 @@ function applyFilters(
   return q;
 }
 
-export function createTableActions({ schema, table, primaryKey }: FactoryOptions): DataTableActions {
+export function createTableActions({ schema, table, primaryKey, incompleteColumns }: FactoryOptions): DataTableActions {
   return {
     async list(params: ListParams): Promise<ListResult> {
       await requireUser();
@@ -58,6 +60,11 @@ export function createTableActions({ schema, table, primaryKey }: FactoryOptions
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         .from(table as any)
         .select("*", { count: "exact" });
+
+      // Solo incompletas: alguna columna de completitud en NULL.
+      if (params.onlyIncomplete && incompleteColumns?.length) {
+        query = query.or(incompleteColumns.map((c) => `${c}.is.null`).join(","));
+      }
 
       // Sort
       if (params.sort) {
