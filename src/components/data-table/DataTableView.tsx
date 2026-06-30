@@ -38,8 +38,15 @@ export default function DataTableView({ config, actions }: Props) {
   const [error, setError] = useState<string | null>(null);
 
   const [page, setPage] = useState(1);
+  const [pageInput, setPageInput] = useState("1");
   const [pageSize, setPageSize] = useState(config.defaultPageSize ?? 25);
   const [sort, setSort] = useState(config.defaultSort);
+
+  // Mantener el campo "ir a página" sincronizado con la página actual
+  // (cambios por prev/next, salto, o reset al filtrar/cambiar tamaño).
+  useEffect(() => {
+    setPageInput(String(page));
+  }, [page]);
 
   const [filterInputs, setFilterInputs] = useState<Record<string, FilterValue>>({});
   const [filters, setFilters] = useState<Record<string, FilterValue>>({});
@@ -445,9 +452,33 @@ export default function DataTableView({ config, actions }: Props) {
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
                 </svg>
               </button>
-              <span className="text-gray-700 font-semibold px-2">
-                {page} / {totalPages}
-              </span>
+              <div className="flex items-center gap-1 px-1 text-gray-700 font-semibold">
+                <input
+                  type="number"
+                  min={1}
+                  max={totalPages}
+                  value={pageInput}
+                  onChange={(e) => setPageInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      const n = parseInt(pageInput, 10);
+                      setPage(
+                        Number.isFinite(n) ? Math.min(totalPages, Math.max(1, n)) : page,
+                      );
+                      (e.target as HTMLInputElement).blur();
+                    }
+                  }}
+                  onBlur={() => {
+                    const n = parseInt(pageInput, 10);
+                    if (Number.isFinite(n)) setPage(Math.min(totalPages, Math.max(1, n)));
+                    else setPageInput(String(page));
+                  }}
+                  aria-label="Ir a la página"
+                  title="Escribe una página y Enter"
+                  className="w-14 rounded-md border border-gray-300 bg-white px-2 py-1 text-center font-semibold text-gray-900 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+                />
+                <span className="whitespace-nowrap">/ {totalPages}</span>
+              </div>
               <button
                 onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
                 disabled={page >= totalPages}
