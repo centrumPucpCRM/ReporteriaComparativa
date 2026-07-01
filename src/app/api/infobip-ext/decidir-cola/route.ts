@@ -10,11 +10,11 @@ import { checkApiKey } from "@/lib/api-auth";
  *  - NI: número telefónico de Infobip que recibió el inbound
  *
  * Criterio:
- *  - ¿Existe "última atención" (sender_last_rdv) para ese contacto?
- *      · SÍ → cola GEN del NI  (la regla de ventas asigna el RDV)
- *      · NO → cola ING del NI  (el chatbot se encarga)
+ *  - ¿Existe "última atención" (sender_last_rdv) para ese NT + NI?
+ *      · SÍ → cola IN  (ya hay RDV vigente: se ejecuta la regla de ventas y se asigna)
+ *      · NO → cola GEN (round robin / MariAna decide la cartera)
  *
- * El par de colas (ING/GEN) sale de la tabla `colas`, llaveada por NI.
+ * El par de colas (IN/GEN) sale de la tabla `colas`, llaveada por NI.
  */
 
 type Body = { nt?: unknown; ni?: unknown };
@@ -66,12 +66,13 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // 2) ¿Existe última atención para este contacto?
+    // 2) ¿Existe última atención para este NT + NI?
     const { data: ultimaAtencion, error: uaError } = await db
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       .from("sender_last_rdv" as any)
       .select("ultimo_rdv_number, lead_id, fecha_actualizacion")
       .eq("telefono_contacto", nt)
+      .eq("sender", ni)
       .order("fecha_actualizacion", { ascending: false })
       .limit(1)
       .maybeSingle();
@@ -81,12 +82,12 @@ export async function POST(req: NextRequest) {
     }
 
     const encontrado = !!ultimaAtencion;
-    const tipo = encontrado ? "GEN" : "IN";
+    const tipo = encontrado ? "IN" : "GEN";
     const queue_id = encontrado
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      ? (cola as any).gen_queue_id
+      ? (cola as any).ing_queue_id
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      : (cola as any).ing_queue_id;
+      : (cola as any).gen_queue_id;
 
     return NextResponse.json({
       nt,
@@ -95,8 +96,15 @@ export async function POST(req: NextRequest) {
       programa: (cola as any).programa ?? null,
       encontrado,
       tipo,
+      // Cola resuelta: el VALOR de la cola a la que hay que enrutar (según `tipo`).
+      // Es lo que se setea en la conversación al crearla / al poner la nota.
       queue_id,
-      // Datos de la última atención (útiles aguas abajo para la regla de ventas en GEN)
+      // Ambas colas del NI (crudas), por si el consumidor necesita el contexto completo.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      ing_queue_id: (cola as any).ing_queue_id ?? null,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      gen_queue_id: (cola as any).gen_queue_id ?? null,
+      // Datos de la última atención (útiles aguas abajo para la regla de ventas en IN)
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       lead_id: encontrado ? (ultimaAtencion as any).lead_id ?? null : null,
       // eslint-disable-next-line @typescript-eslint/no-explicit-any

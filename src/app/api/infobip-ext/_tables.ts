@@ -19,6 +19,18 @@ export type TableDef = {
    * de estas columnas en NULL.
    */
   incompleteColumns?: string[];
+  /**
+   * Solo aplica en INSERT (no matchea ninguna fila por `upsertOn`): si esta columna
+   * llega null/ausente, se busca su valor en otra tabla filtrando por las mismas
+   * columnas de `upsertOn` (deben llamarse igual en ambas tablas). Si tampoco
+   * aparece ahí, la columna queda en null. En UPDATE no se usa: `preserveOnNull`
+   * ya se encarga de no pisar el valor existente.
+   */
+  fallbackLookup?: {
+    schema: string;
+    table: string;
+    column: string;
+  };
 };
 
 export const TABLES = {
@@ -37,6 +49,12 @@ export const TABLES = {
     primaryKey: "id",
     upsertOn: "telefono_contacto,sender",
     touch: "fecha_actualizacion",
+    preserveOnNull: true,
+    fallbackLookup: {
+      schema: "Infobip_ext",
+      table: "conversation_lead_relation",
+      column: "lead_id",
+    },
   },
   "colas": {
     schema: "Infobip_ext",

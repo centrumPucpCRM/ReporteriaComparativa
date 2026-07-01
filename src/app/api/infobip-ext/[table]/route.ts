@@ -36,6 +36,35 @@ function buildPayload(target: TableDef, body: Record<string, unknown>): Record<s
   return payload;
 }
 
+// Si la fila es nueva (no matchea `upsertOn`) y falta `fallbackLookup.column`, la
+// busca en la tabla de fallback filtrando por las columnas de `upsertOn` (deben
+// llamarse igual en ambas tablas). Si ya hay fila, no hace nada: `preserveOnNull`
+// se encarga de no pisar el valor existente. Si tampoco aparece en el fallback,
+// la columna queda ausente del payload (se inserta en null).
+async function applyFallbackLookup(
+  admin: AdminClient,
+  target: TableDef,
+  payload: Record<string, unknown>,
+): Promise<void> {
+  const fb = target.fallbackLookup;
+  if (!fb || !target.upsertOn || payload[fb.column] != null) return;
+
+  const keyCols = target.upsertOn.split(",").map((c) => c.trim());
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let existing = admin.schema(target.schema).from(target.table as any).select(fb.column);
+  for (const col of keyCols) existing = existing.eq(col, payload[col] as string);
+  const { data: row } = await existing.maybeSingle();
+  if (row) return;
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let lookup = admin.schema(fb.schema).from(fb.table as any).select(fb.column);
+  for (const col of keyCols) lookup = lookup.eq(col, payload[col] as string);
+  const { data: found } = await lookup.order("id", { ascending: false }).limit(1).maybeSingle();
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const value = found ? (found as any)[fb.column] : null;
+  if (value != null) payload[fb.column] = value;
+}
+
 // Escribe una fila: UPSERT si la tabla declara `upsertOn`, INSERT si no.
 async function writeRow(
   admin: AdminClient,
@@ -43,6 +72,7 @@ async function writeRow(
   body: Record<string, unknown>,
 ): Promise<{ data: unknown; error: string | null }> {
   const payload = buildPayload(target, body);
+  await applyFallbackLookup(admin, target, payload);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const tableRef = admin.schema(target.schema).from(target.table as any);
   const res = target.upsertOn
