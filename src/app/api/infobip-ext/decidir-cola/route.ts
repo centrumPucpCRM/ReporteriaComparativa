@@ -11,10 +11,10 @@ import { checkApiKey } from "@/lib/api-auth";
  *
  * Criterio:
  *  - ¿Existe "última atención" (sender_last_rdv) para ese NT + NI?
- *      · SÍ → cola IN  (ya hay RDV vigente: se ejecuta la regla de ventas y se asigna)
- *      · NO → cola GEN (round robin / MariAna decide la cartera)
+ *      · SÍ → cola GEN (ya hay RDV vigente: se ejecuta la regla de ventas con el lead_id)
+ *      · NO → cola ING (round robin / MariAna decide la cartera)
  *
- * El par de colas (IN/GEN) sale de la tabla `colas`, llaveada por NI.
+ * El par de colas (ING/GEN) sale de la tabla `colas`, llaveada por NI.
  */
 
 type Body = { nt?: unknown; ni?: unknown };
@@ -82,12 +82,12 @@ export async function POST(req: NextRequest) {
     }
 
     const encontrado = !!ultimaAtencion;
-    const tipo = encontrado ? "IN" : "GEN";
+    const tipo = encontrado ? "GEN" : "IN";
     const queue_id = encontrado
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      ? (cola as any).ing_queue_id
+      ? (cola as any).gen_queue_id
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      : (cola as any).gen_queue_id;
+      : (cola as any).ing_queue_id;
 
     return NextResponse.json({
       nt,
@@ -104,7 +104,7 @@ export async function POST(req: NextRequest) {
       ing_queue_id: (cola as any).ing_queue_id ?? null,
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       gen_queue_id: (cola as any).gen_queue_id ?? null,
-      // Datos de la última atención (útiles aguas abajo para la regla de ventas en IN)
+      // Datos de la última atención (útiles aguas abajo para la regla de ventas en GEN)
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       lead_id: encontrado ? (ultimaAtencion as any).lead_id ?? null : null,
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
