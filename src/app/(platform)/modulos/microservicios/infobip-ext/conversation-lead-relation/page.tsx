@@ -1,10 +1,15 @@
 "use client";
 
+import { useMemo, useState } from "react";
 import DataTableView from "@/components/data-table/DataTableView";
-import type { TableConfig } from "@/components/data-table/types";
-import { createRow, listRows, removeRow, updateRow } from "./actions";
+import ChatHistoryModal from "@/components/data-table/ChatHistoryModal";
+import type { RowData, TableConfig } from "@/components/data-table/types";
+import { createRow, getChatHistory, listRows, removeRow, updateRow } from "./actions";
 
-const CONFIG: TableConfig = {
+const CHAT_ICON =
+  "M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z";
+
+const BASE_CONFIG: TableConfig = {
   title: "Conversaciones ↔ Leads",
   description:
     "Relaciona cada conversación de Infobip con su lead correspondiente.",
@@ -63,15 +68,43 @@ const CONFIG: TableConfig = {
 };
 
 export default function ConversationLeadRelationPage() {
+  const [chatRow, setChatRow] = useState<RowData | null>(null);
+
+  const config = useMemo<TableConfig>(
+    () => ({
+      ...BASE_CONFIG,
+      rowActions: [
+        {
+          key: "chat",
+          title: "Ver historial de chat",
+          iconPath: CHAT_ICON,
+          onClick: (row) => setChatRow(row),
+          enabled: (row) => Boolean(row.infobip_conversation_id),
+        },
+      ],
+    }),
+    [],
+  );
+
   return (
-    <DataTableView
-      config={CONFIG}
-      actions={{
-        list: listRows,
-        create: createRow,
-        update: updateRow,
-        remove: removeRow,
-      }}
-    />
+    <>
+      <DataTableView
+        config={config}
+        actions={{
+          list: listRows,
+          create: createRow,
+          update: updateRow,
+          remove: removeRow,
+        }}
+      />
+      {chatRow ? (
+        <ChatHistoryModal
+          conversationId={String(chatRow.infobip_conversation_id)}
+          leadId={chatRow.lead_id != null ? String(chatRow.lead_id) : null}
+          load={getChatHistory}
+          onClose={() => setChatRow(null)}
+        />
+      ) : null}
+    </>
   );
 }

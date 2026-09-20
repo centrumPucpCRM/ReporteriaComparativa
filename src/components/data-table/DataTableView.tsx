@@ -355,7 +355,11 @@ export default function DataTableView({ config, actions }: Props) {
                     </span>
                   </th>
                 ))}
-                <th className="px-4 py-3 text-right text-xs font-bold uppercase tracking-wider text-gray-500 w-24">
+                <th
+                  className={`px-4 py-3 text-right text-xs font-bold uppercase tracking-wider text-gray-500 ${
+                    config.rowActions?.length ? "w-32" : "w-24"
+                  }`}
+                >
                   Acciones
                 </th>
               </tr>
@@ -409,6 +413,23 @@ export default function DataTableView({ config, actions }: Props) {
                       onClick={(e) => e.stopPropagation()}
                     >
                       <div className="inline-flex items-center gap-1">
+                        {(config.rowActions ?? []).map((action) => {
+                          const disabled = action.enabled ? !action.enabled(row) : false;
+                          return (
+                            <button
+                              key={action.key}
+                              onClick={() => action.onClick(row)}
+                              disabled={disabled}
+                              title={action.title}
+                              aria-label={action.title}
+                              className="inline-flex items-center justify-center w-8 h-8 rounded-md text-gray-500 hover:bg-gray-100 hover:text-gray-900 disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-gray-500"
+                            >
+                              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d={action.iconPath} />
+                              </svg>
+                            </button>
+                          );
+                        })}
                         <button
                           onClick={() => openEdit(row)}
                           title="Editar"

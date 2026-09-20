@@ -16,6 +16,18 @@ export interface ColumnConfig {
   placeholder?: string;
 }
 
+/** Botón extra en la columna "Acciones", antes de Editar/Eliminar. */
+export interface RowAction {
+  key: string;
+  /** Tooltip y aria-label. */
+  title: string;
+  /** `d` de un <path> SVG 24x24 con stroke (mismo estilo que los iconos ya existentes). */
+  iconPath: string;
+  onClick: (row: RowData) => void;
+  /** Si devuelve false, el botón se muestra deshabilitado para esa fila. */
+  enabled?: (row: RowData) => boolean;
+}
+
 export interface TableConfig {
   title: string;
   description?: string;
@@ -31,6 +43,8 @@ export interface TableConfig {
    * alguna de estas columnas en NULL.
    */
   incompleteColumns?: string[];
+  /** Botones extra por fila (ej: ver historial de chat). */
+  rowActions?: RowAction[];
 }
 
 export type RowData = Record<string, unknown>;
