@@ -64,7 +64,7 @@ src/
 - `/modulos` → authenticated hub (entry point after login); selector con cards a cada módulo
 - `/modulos/reporteria` → dashboard comparativo (módulo principal)
 - `/modulos/microservicios` → selector de microservicios (cards)
-- `/modulos/microservicios/infobip-ext` → home + sub-tablas (`conversation-lead-relation`, `sender-last-rdv`, `colas`)
+- `/modulos/microservicios/infobip-ext` → home + sub-tablas (`conversation-lead-relation`, `sender-last-rdv`, `colas`) + `broadcast` (envío masivo, ver "Broadcast")
 - `/modulos/microservicios/sistema-vacaciones` → placeholder
 - `/api/infobip-ext/*` → REST API (see "REST API layer" below); not behind session auth
 
@@ -137,6 +137,17 @@ The per-table `actions.ts` must be a `"use server"` module that re-exports thin 
 
 **Supabase schema**: the infobip data lives in a non-public schema named `Infobip_ext` (capital I, underscore) with tables `conversation_lead_relation`, `sender_last_rdv`, `colas`. Always access it via `.schema("Infobip_ext")` — the default client only sees `public`. The casts to `as any` on `.from(table)` are a known workaround because these tables aren't in the generated Supabase types.
 
+## Broadcast (infobip-ext)
+
+[broadcast/](src/app/(platform)/modulos/microservicios/infobip-ext/broadcast/) envía una plantilla WhatsApp a una lista (CSV) **creando o reutilizando la conversación CCaaS de cada contacto** en la cola elegida — a diferencia del broadcast nativo de Infobip, que no crea conversaciones. Habla directo con Infobip vía [src/lib/infobip.ts](src/lib/infobip.ts) (server-only); utilidades puras compartidas con la UI en [src/lib/broadcast.ts](src/lib/broadcast.ts).
+
+- **Cola obligatoria, asesor opcional**, ambos buscados en vivo en Infobip (`/ccaas/1/queues`, `/ccaas/1/agents`, solo agentes `enabled`). `?cola=` / `?asesor=` en la URL los preselecciona (id o nombre exacto).
+- **Línea de envío (`from`)**: se deduce de la cola si es la IN/GEN de alguna fila de `colas`; si no, el usuario la elige entre los NI de esa tabla. Nunca hay número por defecto. Los 7 números comparten WABA, así que la plantilla no determina el número.
+- **Plantillas**: `/whatsapp/2/senders/{ni}/templates`, solo `APPROVED`. Se envían con el **idioma propio de la plantilla** (muchas están registradas como `en` aunque el texto es español). Solo variables de cuerpo: cabeceras con media o variables se bloquean (`motivoNoSoportada`) porque el formato CCaaS no está verificado.
+- **Reutilización**: Infobip no permite buscar conversaciones por teléfono, así que se busca la última en `conversation_lead_relation` por `(telefono_contacto, sender)`; si en Infobip está OPEN/WAITING/SOLVED se reutiliza (PATCH `queueId` + PUT `assignee`), si no se crea una nueva y se registra ahí.
+- **Lotes e idempotencia**: el navegador manda lotes de 10 a `enviarLote`; cada fila se reclama `PENDIENTE → ENVIANDO` atómicamente, así un lote repetido no reenvía. `ERROR` = la plantilla no salió (reintentable); fallos posteriores (etiquetas, registro) son `advertencia` sobre un `OK`. Una fila que queda en `ENVIANDO` no se reintenta sola.
+- Tablas `Infobip_ext.broadcast` y `broadcast_destinatario`: SQL en [sql/infobip_ext_broadcast.sql](sql/infobip_ext_broadcast.sql).
+
 ## Environment
 
 Required `.env.local` at the project root (gitignored via `.env*`):
@@ -146,6 +157,8 @@ NEXT_PUBLIC_SUPABASE_URL=https://<project>.supabase.co
 NEXT_PUBLIC_SUPABASE_ANON_KEY=<anon key>
 SUPABASE_SERVICE_ROLE_KEY=<service role key>   # used by admin.ts: data-table actions + /api/infobip-ext/*
 INFOBIP_EXT_API_KEY=<bearer token>             # gate for /api/infobip-ext/* (checkApiKey)
+INFOBIP_API_KEY=<infobip api key>              # broadcast: llamadas directas a Infobip (src/lib/infobip.ts)
+INFOBIP_API_HOST=<xxxx.api-us.infobip.com>     # broadcast
 ```
 
 `admin.ts` reads env via `readEnvValue()`, which strips a stray `NAME=` prefix and surrounding quotes — so a value accidentally pasted as `SUPABASE_SERVICE_ROLE_KEY=eyJ...` still works.

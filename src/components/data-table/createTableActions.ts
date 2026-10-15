@@ -16,7 +16,7 @@ interface FactoryOptions {
   incompleteColumns?: string[];
 }
 
-async function requireUser() {
+export async function requireUser() {
   const supabase = await createServerClient();
   const {
     data: { user },
