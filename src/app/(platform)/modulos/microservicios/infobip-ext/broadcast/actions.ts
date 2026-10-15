@@ -7,7 +7,9 @@ import {
   assignConversation,
   createConversation,
   ensureTag,
+  findTemplateMessageId,
   getConversation,
+  getDeliveryStatus,
   listAgents,
   listQueues,
   listTemplates,
@@ -16,11 +18,13 @@ import {
   type ConversationInfo,
 } from "@/lib/infobip";
 import {
+  describirErrorEntrega,
   motivoNoSoportada,
   normalizarTelefono,
   type AgentInfo,
   type DestinatarioInput,
   type EstadoDestinatario,
+  type EstadoEntrega,
   type LineaEnvio,
   type Mapeo,
   type QueueInfo,
@@ -167,6 +171,7 @@ export async function crearBroadcast(input: CrearBroadcastInput): Promise<Result
 
 interface BroadcastRow {
   id: number;
+  created_at: string;
   campana: string;
   queue_id: string;
   agent_id: string | null;
@@ -238,6 +243,9 @@ interface DestinatarioRow {
   conversacion_reutilizada: boolean | null;
   error: string | null;
   advertencia: string | null;
+  message_id: string | null;
+  entrega: EstadoEntrega | null;
+  entrega_detalle: string | null;
 }
 
 function toResultado(r: DestinatarioRow): ResultadoDestinatario {
@@ -250,6 +258,8 @@ function toResultado(r: DestinatarioRow): ResultadoDestinatario {
     reutilizada: r.conversacion_reutilizada,
     error: r.error,
     advertencia: r.advertencia,
+    entrega: r.entrega,
+    entregaDetalle: r.entrega_detalle,
   };
 }
 
@@ -542,10 +552,15 @@ async function procesarDestinatario(b: BroadcastRow, d: DestinatarioRow): Promis
     if (!r.ok) advertencias.push(`Etiqueta "${tag}": ${r.error}`);
   }
 
+  // "OK" = Infobip aceptó el mensaje. Si WhatsApp lo entrega o no (p. ej. Meta
+  // lo bloquea por frecuencia, 7032) se sabe después: `verificarEntregas`.
   return fin("OK", {
     conversation_id: conversationId,
     conversacion_reutilizada: reutilizada,
     error: null,
+    message_id: envio.data?.id ?? null,
+    entrega: "PENDIENTE",
+    entrega_detalle: null,
   });
 }
 
@@ -593,6 +608,8 @@ export async function enviarLote(
           conversacion_reutilizada: r.conversacion_reutilizada,
           error: r.error,
           advertencia: r.advertencia,
+          message_id: r.message_id ?? null,
+          entrega: r.entrega ?? null,
           updated_at: new Date().toISOString(),
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
         } as any)
@@ -641,26 +658,124 @@ async function contar(broadcastId: number, estado: EstadoDestinatario): Promise<
   return count ?? 0;
 }
 
-/** Recalcula los contadores del broadcast y lo cierra si no queda nada pendiente. */
-async function actualizarContadores(broadcastId: number): Promise<ConteoEstados> {
-  const [ok, error, pendientes, sinConfirmar] = await Promise.all([
+async function contarEntrega(broadcastId: number, entrega: EstadoEntrega): Promise<number> {
+  const { count, error } = await tabla("broadcast_destinatario")
+    .select("id", { count: "exact", head: true })
+    .eq("broadcast_id", broadcastId)
+    .eq("estado", "OK")
+    .eq("entrega", entrega);
+  if (error) throw new Error(error.message);
+  return count ?? 0;
+}
+
+async function calcularConteos(broadcastId: number): Promise<ConteoEstados> {
+  const [ok, error, pendientes, sinConfirmar, entregados, noEntregados, entregaPendiente] = await Promise.all([
     contar(broadcastId, "OK"),
     contar(broadcastId, "ERROR"),
     contar(broadcastId, "PENDIENTE"),
     contar(broadcastId, "ENVIANDO"),
+    contarEntrega(broadcastId, "ENTREGADO"),
+    contarEntrega(broadcastId, "NO_ENTREGADO"),
+    contarEntrega(broadcastId, "PENDIENTE"),
   ]);
-  await db()
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    .from("broadcast" as any)
+  return { ok, error, pendientes, sinConfirmar, entregados, noEntregados, entregaPendiente };
+}
+
+/** Recalcula los contadores del broadcast y lo cierra si no queda nada pendiente. */
+async function actualizarContadores(broadcastId: number): Promise<ConteoEstados> {
+  const c = await calcularConteos(broadcastId);
+  await tabla("broadcast")
     .update({
-      enviados: ok,
-      fallidos: error,
-      estado: pendientes === 0 ? "FINALIZADO" : "EN_CURSO",
+      enviados: c.ok,
+      fallidos: c.error,
+      entregados: c.entregados,
+      no_entregados: c.noEntregados,
+      estado: c.pendientes === 0 ? "FINALIZADO" : "EN_CURSO",
       updated_at: new Date().toISOString(),
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
     } as any)
     .eq("id", broadcastId);
-  return { ok, error, pendientes, sinConfirmar };
+  return c;
+}
+
+// ==================== Entrega ====================
+
+/** Filas por llamada a `verificarEntregas` (y ids por consulta a los logs). */
+const MAX_VERIFICAR = 200;
+const IDS_POR_LOG = 50;
+const GRUPOS_NO_ENTREGADO = new Set(["UNDELIVERABLE", "EXPIRED", "REJECTED"]);
+
+/**
+ * Consulta en los logs de Infobip qué pasó con los mensajes ya aceptados
+ * (entrega PENDIENTE) y guarda ENTREGADO / NO_ENTREGADO con el motivo.
+ * No toca `updated_at` del broadcast: eso marca actividad de envío.
+ */
+export async function verificarEntregas(
+  broadcastId: number,
+): Promise<Result<{ actualizados: ResultadoDestinatario[]; pendientes: number }>> {
+  return safe(async () => {
+    await requireUser();
+    const b = await cargarBroadcast(broadcastId);
+
+    const { data, error } = await tabla("broadcast_destinatario")
+      .select("*")
+      .eq("broadcast_id", broadcastId)
+      .eq("estado", "OK")
+      .eq("entrega", "PENDIENTE")
+      .order("fila", { ascending: true })
+      .limit(MAX_VERIFICAR);
+    if (error) throw new Error(error.message);
+    const filas = (data ?? []) as unknown as DestinatarioRow[];
+
+    // Envíos anteriores a guardar el id: buscarlo en la conversación.
+    await mapLimit(
+      filas.filter((f) => !f.message_id && f.conversation_id),
+      CONCURRENCIA,
+      async (f) => {
+        const mid = await findTemplateMessageId(f.conversation_id!, b.template_nombre, b.created_at);
+        if (!mid) return;
+        f.message_id = mid;
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        await tabla("broadcast_destinatario").update({ message_id: mid } as any).eq("id", f.id);
+      },
+    );
+
+    const conId = filas.filter((f) => f.message_id);
+    const estados: Awaited<ReturnType<typeof getDeliveryStatus>> = new Map();
+    for (let i = 0; i < conId.length; i += IDS_POR_LOG) {
+      const parte = await getDeliveryStatus(conId.slice(i, i + IDS_POR_LOG).map((f) => f.message_id!));
+      for (const [k, v] of parte) estados.set(k, v);
+    }
+
+    const actualizados: ResultadoDestinatario[] = [];
+    await mapLimit(conId, CONCURRENCIA, async (f) => {
+      const e = estados.get(f.message_id!);
+      if (!e) return; // todavía no aparece en los logs
+      let entrega: EstadoEntrega;
+      let detalle: string | null = null;
+      if (e.grupo === "DELIVERED") {
+        entrega = "ENTREGADO";
+      } else if (GRUPOS_NO_ENTREGADO.has(e.grupo)) {
+        entrega = "NO_ENTREGADO";
+        detalle = describirErrorEntrega(e.errorId, e.errorNombre, e.errorDescripcion);
+      } else {
+        return; // PENDING: sigue en camino
+      }
+      const ahora = new Date().toISOString();
+      await tabla("broadcast_destinatario")
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        .update({ entrega, entrega_detalle: detalle, entrega_at: ahora } as any)
+        .eq("id", f.id);
+      actualizados.push(toResultado({ ...f, entrega, entrega_detalle: detalle }));
+    });
+
+    const c = await calcularConteos(broadcastId);
+    await tabla("broadcast")
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      .update({ entregados: c.entregados, no_entregados: c.noEntregados } as any)
+      .eq("id", broadcastId);
+    return { actualizados, pendientes: c.entregaPendiente };
+  });
 }
 
 export async function finalizarBroadcast(broadcastId: number): Promise<Result<ConteoEstados>> {
@@ -677,6 +792,10 @@ export interface ConteoEstados {
   error: number;
   pendientes: number;
   sinConfirmar: number;
+  /** De los OK: qué hizo WhatsApp con el mensaje. */
+  entregados: number;
+  noEntregados: number;
+  entregaPendiente: number;
 }
 
 export interface BroadcastResumen {
@@ -694,6 +813,8 @@ export interface BroadcastResumen {
   total: number;
   enviados: number;
   fallidos: number;
+  entregados: number;
+  no_entregados: number;
   estado: string;
 }
 
@@ -708,7 +829,7 @@ export async function listarBroadcasts(params: {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       .from("broadcast" as any)
       .select(
-        "id, created_at, updated_at, creado_por, campana, queue_id, queue_nombre, agent_nombre, sender, template_nombre, template_idioma, total, enviados, fallidos, estado",
+        "id, created_at, updated_at, creado_por, campana, queue_id, queue_nombre, agent_nombre, sender, template_nombre, template_idioma, total, enviados, fallidos, entregados, no_entregados, estado",
         { count: "exact" },
       )
       .order("id", { ascending: false });
@@ -730,27 +851,19 @@ export async function obtenerBroadcast(
 ): Promise<Result<{ broadcast: BroadcastResumen & { template_variables: number[]; mapeo: Mapeo | null }; conteo: ConteoEstados }>> {
   return safe(async () => {
     await requireUser();
-    const [{ data, error }, ok, err, pendientes, sinConfirmar] = await Promise.all([
-      db()
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        .from("broadcast" as any)
-        .select("*")
-        .eq("id", broadcastId)
-        .single(),
-      contar(broadcastId, "OK"),
-      contar(broadcastId, "ERROR"),
-      contar(broadcastId, "PENDIENTE"),
-      contar(broadcastId, "ENVIANDO"),
+    const [{ data, error }, conteo] = await Promise.all([
+      tabla("broadcast").select("*").eq("id", broadcastId).single(),
+      calcularConteos(broadcastId),
     ]);
     if (error || !data) throw new Error(`Broadcast ${broadcastId} no encontrado.`);
     return {
       broadcast: data as unknown as BroadcastResumen & { template_variables: number[]; mapeo: Mapeo | null },
-      conteo: { ok, error: err, pendientes, sinConfirmar },
+      conteo,
     };
   });
 }
 
-export type FiltroDestinatario = EstadoDestinatario | "ADVERTENCIA" | "TODOS";
+export type FiltroDestinatario = EstadoDestinatario | "ADVERTENCIA" | "NO_ENTREGADO" | "TODOS";
 
 export async function listarDestinatarios(params: {
   broadcastId: number;
@@ -768,6 +881,7 @@ export async function listarDestinatarios(params: {
       .eq("broadcast_id", params.broadcastId)
       .order("fila", { ascending: true });
     if (params.filtro === "ADVERTENCIA") q = q.not("advertencia", "is", null);
+    else if (params.filtro === "NO_ENTREGADO") q = q.eq("entrega", "NO_ENTREGADO");
     else if (params.filtro !== "TODOS") q = q.eq("estado", params.filtro);
     const tel = params.telefono?.replace(/\D/g, "");
     if (tel) q = q.ilike("telefono", `%${tel}%`);

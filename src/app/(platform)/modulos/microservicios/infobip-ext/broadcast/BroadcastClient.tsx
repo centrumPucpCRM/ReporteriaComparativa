@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState, type ReactNode } from "react";
 import Link from "next/link";
 import Papa from "papaparse";
 import SearchSelect, { type SearchOption } from "./SearchSelect";
-import { Badge, BarraProgreso, descargarCsv } from "./ui";
+import { Badge, BarraProgreso, EstadoFilaBadge, descargarCsv } from "./ui";
 import {
   agregarDestinatarios,
   cargarCatalogos,
@@ -13,6 +13,7 @@ import {
   enviarLote,
   finalizarBroadcast,
   reintentarFallidos,
+  verificarEntregas,
 } from "./actions";
 import {
   motivoNoSoportada,
@@ -65,6 +66,8 @@ interface Envio {
 }
 
 const LOTE = 10;
+/** Esperas entre consultas de entrega al terminar el envío. */
+const ENTREGA_ESPERAS_MS = [5000, 8000, 12000, 20000];
 const TANDA_INSERT = 500;
 const COLUMNAS_TELEFONO = ["telefono", "celular", "movil", "phone", "numero", "whatsapp", "nt"];
 
@@ -287,6 +290,27 @@ export default function BroadcastClient({ colaInicial, asesorInicial }: Props) {
     setEnvio((e) =>
       e ? { ...e, procesando: false, resumen: resumen.success ? resumen.data : e.resumen } : e,
     );
+    await confirmarEntregas(broadcastId);
+  }
+
+  /**
+   * WhatsApp confirma (o rechaza) la entrega unos segundos después de que
+   * Infobip acepta el mensaje: se consulta un par de veces y se actualizan
+   * las filas. Lo que quede pendiente se sigue verificando en el historial.
+   */
+  async function confirmarEntregas(broadcastId: number) {
+    for (const espera of ENTREGA_ESPERAS_MS) {
+      await new Promise((r) => setTimeout(r, espera));
+      const r = await verificarEntregas(broadcastId);
+      if (!r.success) return;
+      setEnvio((e) => {
+        if (!e || e.broadcastId !== broadcastId) return e;
+        const resultados = { ...e.resultados };
+        for (const res of r.data.actualizados) resultados[res.id] = res;
+        return { ...e, resultados };
+      });
+      if (r.data.pendientes === 0) return;
+    }
   }
 
   async function iniciarEnvio() {
@@ -818,8 +842,13 @@ function ProgresoEnvio({
   const errores = resultados.filter((r) => r.estado === "ERROR").length;
   const reutilizadas = resultados.filter((r) => r.estado === "OK" && r.reutilizada).length;
   const conAdvertencia = resultados.filter((r) => r.advertencia).length;
+  const entregados = resultados.filter((r) => r.entrega === "ENTREGADO").length;
+  const noEntregados = resultados.filter((r) => r.entrega === "NO_ENTREGADO").length;
+  const confirmando = resultados.filter((r) => r.estado === "OK" && r.entrega === "PENDIENTE").length;
   const pct = total ? Math.round((hechos / total) * 100) : 0;
-  const visibles = soloProblemas ? resultados.filter((r) => r.estado !== "OK" || r.advertencia) : resultados;
+  const visibles = soloProblemas
+    ? resultados.filter((r) => r.estado !== "OK" || r.advertencia || r.entrega === "NO_ENTREGADO")
+    : resultados;
   const terminado = !envio.procesando && !envio.interrumpido && hechos >= total;
 
   return (
@@ -840,15 +869,17 @@ function ProgresoEnvio({
         <span className="text-2xl font-bold text-gray-900">{pct}%</span>
       </div>
 
-      <BarraProgreso total={total} ok={ok} error={errores} alto="h-3" />
+      <BarraProgreso total={total} ok={ok - noEntregados} error={errores + noEntregados} alto="h-3" />
 
       <div className="flex flex-wrap gap-2 text-sm">
         <Badge color="gray">
           {hechos} / {total} procesados
         </Badge>
-        <Badge color="emerald">{ok} enviados</Badge>
-        {reutilizadas ? <Badge color="sky">{reutilizadas} en conversación existente</Badge> : null}
-        {errores ? <Badge color="red">{errores} con error</Badge> : null}
+        <Badge color="emerald">{entregados} entregados</Badge>
+        {confirmando ? <Badge color="sky">{confirmando} confirmando entrega</Badge> : null}
+        {noEntregados ? <Badge color="red">{noEntregados} no entregados</Badge> : null}
+        {reutilizadas ? <Badge color="gray">{reutilizadas} en conversación existente</Badge> : null}
+        {errores ? <Badge color="red">{errores} con error al enviar</Badge> : null}
         {conAdvertencia ? <Badge color="amber">{conAdvertencia} con advertencia</Badge> : null}
       </div>
 
@@ -893,6 +924,8 @@ function ProgresoEnvio({
                 fila: r.fila,
                 telefono: r.telefono,
                 estado: r.estado,
+                entrega: r.entrega ?? "",
+                detalle_entrega: r.entregaDetalle ?? "",
                 conversacion: r.conversationId ?? "",
                 reutilizada: r.reutilizada ? "si" : "no",
                 error: r.error ?? "",
@@ -921,7 +954,7 @@ function ProgresoEnvio({
         ) : null}
         <label className="ml-auto inline-flex items-center gap-2 text-sm text-gray-600">
           <input type="checkbox" checked={soloProblemas} onChange={(e) => setSoloProblemas(e.target.checked)} />
-          Solo errores y advertencias
+          Solo problemas
         </label>
       </div>
 
@@ -941,12 +974,11 @@ function ProgresoEnvio({
                 <td className="px-3 py-1.5 text-gray-500">{r.fila}</td>
                 <td className="px-3 py-1.5 font-mono text-gray-900">{r.telefono}</td>
                 <td className="px-3 py-1.5">
-                  <Badge color={r.estado === "OK" ? "emerald" : r.estado === "ERROR" ? "red" : "amber"}>
-                    {r.estado === "OK" ? (r.reutilizada ? "OK · existente" : "OK · nueva") : r.estado}
-                  </Badge>
+                  <EstadoFilaBadge estado={r.estado} reutilizada={r.reutilizada} entrega={r.entrega} />
                 </td>
                 <td className="px-3 py-1.5 text-xs text-gray-600">
                   {r.error ? <p className="text-red-600">{r.error}</p> : null}
+                  {r.entregaDetalle ? <p className="text-red-600">{r.entregaDetalle}</p> : null}
                   {r.advertencia ? <p className="text-amber-700">{r.advertencia}</p> : null}
                   {r.conversationId ? <p className="font-mono text-gray-400">{r.conversationId}</p> : null}
                 </td>

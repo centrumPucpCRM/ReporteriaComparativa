@@ -71,10 +71,10 @@ export function estaActivo(b: { estado: string; updated_at: string }): boolean {
 export function EstadoBroadcast({
   b,
 }: {
-  b: { estado: string; updated_at: string; fallidos: number; total: number; enviados: number };
+  b: { estado: string; updated_at: string; fallidos: number; no_entregados?: number };
 }) {
   if (b.estado === "FINALIZADO") {
-    return b.fallidos > 0 ? (
+    return b.fallidos > 0 || (b.no_entregados ?? 0) > 0 ? (
       <Badge color="amber">Finalizado con errores</Badge>
     ) : (
       <Badge color="emerald">Finalizado</Badge>
@@ -89,6 +89,30 @@ export function EstadoBroadcast({
     );
   }
   return <Badge color="red">Detenido</Badge>;
+}
+
+/**
+ * Estado de una fila: primero si Infobip aceptó el envío (OK/ERROR) y, para
+ * los OK, si WhatsApp lo entregó.
+ */
+export function EstadoFilaBadge({
+  estado,
+  reutilizada,
+  entrega,
+}: {
+  estado: string;
+  reutilizada: boolean | null;
+  entrega: string | null;
+}) {
+  if (estado === "OK") {
+    const conv = reutilizada ? "existente" : "nueva";
+    if (entrega === "ENTREGADO") return <Badge color="emerald">Entregado · {conv}</Badge>;
+    if (entrega === "NO_ENTREGADO") return <Badge color="red">No entregado · {conv}</Badge>;
+    return <Badge color="sky">Enviado, confirmando entrega · {conv}</Badge>;
+  }
+  if (estado === "ERROR") return <Badge color="red">Error al enviar</Badge>;
+  if (estado === "PENDIENTE") return <Badge color="gray">Pendiente</Badge>;
+  return <Badge color="amber">Sin confirmar</Badge>;
 }
 
 export function formatoFecha(iso: string): string {

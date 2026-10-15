@@ -10,16 +10,29 @@ import {
   listarDestinatarios,
   obtenerBroadcast,
   reintentarFallidos,
+  verificarEntregas,
   type ConteoEstados,
   type FiltroDestinatario,
 } from "../../actions";
 import type { Mapeo, ResultadoDestinatario } from "@/lib/broadcast";
-import { Badge, BarraProgreso, EstadoBroadcast, descargarCsv, estaActivo, formatoFecha } from "../../ui";
+import {
+  Badge,
+  BarraProgreso,
+  EstadoBroadcast,
+  EstadoFilaBadge,
+  descargarCsv,
+  estaActivo,
+  formatoFecha,
+} from "../../ui";
 
 const BASE = "/modulos/microservicios/infobip-ext/broadcast";
 const PAGE_SIZE = 50;
 const LOTE = 10;
 const REFRESCO_MS = 4000;
+/** Cada cuánto se consulta la entrega mientras haya mensajes por confirmar. */
+const VERIFICAR_ENTREGA_MS = 8000;
+/** Tope de consultas automáticas por visita (los logs pueden no traer todo). */
+const MAX_VERIFICACIONES_AUTO = 12;
 
 type Detalle = Extract<Awaited<ReturnType<typeof obtenerBroadcast>>, { success: true }>["data"];
 type Fila = ResultadoDestinatario & { parametros: Record<string, string> };
@@ -28,6 +41,7 @@ const FILTROS: { value: FiltroDestinatario; label: string }[] = [
   { value: "TODOS", label: "Todos" },
   { value: "OK", label: "Enviados" },
   { value: "ERROR", label: "Con error" },
+  { value: "NO_ENTREGADO", label: "No entregados" },
   { value: "ADVERTENCIA", label: "Con advertencia" },
   { value: "PENDIENTE", label: "Pendientes" },
   { value: "ENVIANDO", label: "Sin confirmar" },
@@ -57,6 +71,8 @@ export default function HistorialDetalle({ id }: { id: number }) {
   const [enviando, setEnviando] = useState(false);
   const [mensaje, setMensaje] = useState<string | null>(null);
   const [descargando, setDescargando] = useState(false);
+  const [verificando, setVerificando] = useState(false);
+  const [verificacionesAuto, setVerificacionesAuto] = useState(0);
 
   useEffect(() => {
     const t = setTimeout(() => {
@@ -96,6 +112,32 @@ export default function HistorialDetalle({ id }: { id: number }) {
     const t = setInterval(() => setTick((n) => n + 1), REFRESCO_MS);
     return () => clearInterval(t);
   }, [activo]);
+
+  // Confirmación de entrega: WhatsApp la resuelve segundos después del envío.
+  const entregaPendiente = detalle?.conteo.entregaPendiente ?? 0;
+  useEffect(() => {
+    if (!entregaPendiente || enviando || verificacionesAuto >= MAX_VERIFICACIONES_AUTO) return;
+    let cancelled = false;
+    const t = setTimeout(async () => {
+      const r = await verificarEntregas(id);
+      if (cancelled) return;
+      setVerificacionesAuto((n) => n + 1);
+      if (r.success && r.data.actualizados.length) setTick((n) => n + 1);
+    }, VERIFICAR_ENTREGA_MS);
+    return () => {
+      cancelled = true;
+      clearTimeout(t);
+    };
+  }, [id, entregaPendiente, enviando, verificacionesAuto]);
+
+  async function verificarAhora() {
+    setVerificando(true);
+    const r = await verificarEntregas(id);
+    setVerificando(false);
+    if (!r.success) return setMensaje(r.error);
+    setVerificacionesAuto(0);
+    setTick((n) => n + 1);
+  }
 
   async function correrLotes(ids: number[]) {
     setEnviando(true);
@@ -137,6 +179,8 @@ export default function HistorialDetalle({ id }: { id: number }) {
         fila: f.fila,
         telefono: f.telefono,
         estado: f.estado,
+        entrega: f.entrega ?? "",
+        detalle_entrega: f.entregaDetalle ?? "",
         conversacion: f.conversationId ?? "",
         reutilizada: f.reutilizada ? "si" : "no",
         error: f.error ?? "",
@@ -188,8 +232,8 @@ export default function HistorialDetalle({ id }: { id: number }) {
 
         <BarraProgreso
           total={totalDest}
-          ok={conteo.ok}
-          error={conteo.error}
+          ok={conteo.ok - conteo.noEntregados}
+          error={conteo.error + conteo.noEntregados}
           sinConfirmar={conteo.sinConfirmar}
           alto="h-3"
         />
@@ -230,6 +274,13 @@ export default function HistorialDetalle({ id }: { id: number }) {
             la plantilla salió. No se reintentan solos para no duplicar; revísalos en Infobip.
           </p>
         ) : null}
+        {conteo.noEntregados > 0 ? (
+          <p className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+            {conteo.noEntregados} mensaje(s) los aceptó Infobip pero WhatsApp no los entregó. Mira el motivo en el
+            filtro &quot;No entregados&quot;. No se reintentan: suele ser un bloqueo de Meta (por ejemplo, demasiadas
+            plantillas de marketing al mismo contacto) que se repetiría.
+          </p>
+        ) : null}
         {mensaje ? (
           <p className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{mensaje}</p>
         ) : null}
@@ -251,6 +302,16 @@ export default function HistorialDetalle({ id }: { id: number }) {
               className="rounded-lg bg-red-600 px-4 py-2 text-sm font-semibold text-white hover:bg-red-700"
             >
               Reintentar {conteo.error} con error
+            </button>
+          ) : null}
+          {entregaPendiente > 0 ? (
+            <button
+              type="button"
+              disabled={verificando}
+              onClick={verificarAhora}
+              className="rounded-lg border border-sky-300 px-4 py-2 text-sm font-semibold text-sky-700 hover:bg-sky-50 disabled:opacity-40"
+            >
+              {verificando ? "Verificando..." : `Verificar entregas (${entregaPendiente})`}
             </button>
           ) : null}
           <button
@@ -312,7 +373,7 @@ export default function HistorialDetalle({ id }: { id: number }) {
                   <td className="px-3 py-1.5 text-gray-500">{f.fila}</td>
                   <td className="px-3 py-1.5 font-mono text-gray-900">{f.telefono}</td>
                   <td className="px-3 py-1.5">
-                    <EstadoFila f={f} />
+                    <EstadoFilaBadge estado={f.estado} reutilizada={f.reutilizada} entrega={f.entrega} />
                   </td>
                   <td className="px-3 py-1.5 text-xs text-gray-600">
                     {Object.entries(f.parametros)
@@ -321,6 +382,7 @@ export default function HistorialDetalle({ id }: { id: number }) {
                   </td>
                   <td className="px-3 py-1.5 text-xs text-gray-600">
                     {f.error ? <p className="text-red-600">{f.error}</p> : null}
+                    {f.entregaDetalle ? <p className="text-red-600">{f.entregaDetalle}</p> : null}
                     {f.advertencia ? <p className="text-amber-700">{f.advertencia}</p> : null}
                     {f.conversationId ? <p className="font-mono text-gray-400">{f.conversationId}</p> : null}
                   </td>
@@ -377,21 +439,14 @@ function Conteos({ conteo, total }: { conteo: ConteoEstados; total: number }) {
   return (
     <div className="flex flex-wrap gap-2">
       <Badge color="gray">{total} contactos</Badge>
-      <Badge color="emerald">{conteo.ok} enviados</Badge>
-      {conteo.error ? <Badge color="red">{conteo.error} con error</Badge> : null}
+      <Badge color="emerald">{conteo.entregados} entregados</Badge>
+      {conteo.noEntregados ? <Badge color="red">{conteo.noEntregados} no entregados</Badge> : null}
+      {conteo.entregaPendiente ? <Badge color="sky">{conteo.entregaPendiente} confirmando entrega</Badge> : null}
+      {conteo.error ? <Badge color="red">{conteo.error} con error al enviar</Badge> : null}
       {conteo.pendientes ? <Badge color="sky">{conteo.pendientes} pendientes</Badge> : null}
       {conteo.sinConfirmar ? <Badge color="amber">{conteo.sinConfirmar} sin confirmar</Badge> : null}
     </div>
   );
-}
-
-function EstadoFila({ f }: { f: Fila }) {
-  if (f.estado === "OK") {
-    return <Badge color="emerald">{f.reutilizada ? "OK · existente" : "OK · nueva"}</Badge>;
-  }
-  if (f.estado === "ERROR") return <Badge color="red">Error</Badge>;
-  if (f.estado === "PENDIENTE") return <Badge color="sky">Pendiente</Badge>;
-  return <Badge color="amber">Sin confirmar</Badge>;
 }
 
 function Dato({ label, children }: { label: string; children: ReactNode }) {

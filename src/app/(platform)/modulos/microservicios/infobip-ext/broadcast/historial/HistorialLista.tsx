@@ -134,9 +134,15 @@ export default function HistorialLista() {
                   </td>
                   <td className="px-3 py-2 font-mono text-gray-700">{b.sender}</td>
                   <td className="px-3 py-2">
-                    <BarraProgreso total={b.total} ok={b.enviados} error={b.fallidos} />
+                    <BarraProgreso
+                      total={b.total}
+                      ok={b.enviados - b.no_entregados}
+                      error={b.fallidos + b.no_entregados}
+                    />
                     <p className="mt-1 text-[11px] text-gray-600">
-                      {procesados} / {b.total} · <span className="text-emerald-700">{b.enviados} OK</span>
+                      {procesados} / {b.total} ·{" "}
+                      <span className="text-emerald-700">{b.entregados} entregados</span>
+                      {b.no_entregados ? <span className="text-red-600"> · {b.no_entregados} no entregados</span> : null}
                       {b.fallidos ? <span className="text-red-600"> · {b.fallidos} error</span> : null}
                     </p>
                   </td>

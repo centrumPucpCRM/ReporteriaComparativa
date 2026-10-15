@@ -275,7 +275,7 @@ export async function sendTemplate(input: {
   };
   if (Object.keys(input.parameters).length > 0) content.parameters = [input.parameters];
 
-  return request(
+  return request<{ id?: string }>(
     "POST",
     `/ccaas/1/conversations/${encodeURIComponent(input.conversationId)}/messages`,
     {
@@ -287,6 +287,82 @@ export async function sendTemplate(input: {
     },
     input.agentId ? { "x-agent-id": input.agentId } : undefined,
   );
+}
+
+interface RawConversationMessage {
+  id: string;
+  direction: string;
+  createdAt: string;
+  singleSendMessage?: { content?: { elementName?: string; type?: string } };
+}
+
+/**
+ * Id del primer mensaje OUTBOUND de esa plantilla en la conversación enviado
+ * desde `desde` (creación del broadcast). El primero y no el último: en una
+ * conversación reutilizada, un broadcast posterior pudo mandar la misma
+ * plantilla. Sirve para envíos que no guardaron el id al mandarse.
+ */
+export async function findTemplateMessageId(
+  conversationId: string,
+  templateName: string,
+  desde: string,
+): Promise<string | null> {
+  const r = await request<{ messages?: RawConversationMessage[] }>(
+    "GET",
+    `/ccaas/1/conversations/${encodeURIComponent(conversationId)}/messages?limit=100`,
+  );
+  if (!r.ok || !r.data) return null;
+  const desdeMs = new Date(desde).getTime();
+  const match = (r.data.messages ?? [])
+    .filter(
+      (m) =>
+        m.direction === "OUTBOUND" &&
+        m.singleSendMessage?.content?.elementName === templateName &&
+        new Date(m.createdAt).getTime() >= desdeMs,
+    )
+    .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  return match[0]?.id ?? null;
+}
+
+export interface EstadoEntrega {
+  /** PENDING | DELIVERED | UNDELIVERABLE | EXPIRED | REJECTED ... */
+  grupo: string;
+  nombre: string;
+  errorId: number | null;
+  errorNombre: string | null;
+  errorDescripcion: string | null;
+}
+
+interface RawLog {
+  messageId: string;
+  status?: { groupName?: string; name?: string };
+  error?: { id?: number; name?: string; description?: string } | null;
+}
+
+/**
+ * Estado real de entrega (lo que WhatsApp hizo con el mensaje) desde los logs
+ * de Infobip. Acepta varios ids por llamada. Los mensajes que todavía no
+ * aparecen en los logs simplemente no vienen en el mapa.
+ */
+export async function getDeliveryStatus(messageIds: string[]): Promise<Map<string, EstadoEntrega>> {
+  const out = new Map<string, EstadoEntrega>();
+  if (messageIds.length === 0) return out;
+  const qs = messageIds.map((id) => `messageId=${encodeURIComponent(id)}`).join("&");
+  const data = orThrow(
+    await request<{ results?: RawLog[] }>("GET", `/messages-api/1/logs?${qs}&limit=${messageIds.length}`),
+    "logs de entrega",
+  );
+  for (const l of data.results ?? []) {
+    const errorId = l.error?.id ?? null;
+    out.set(l.messageId, {
+      grupo: l.status?.groupName ?? "",
+      nombre: l.status?.name ?? "",
+      errorId: errorId && errorId !== 0 ? errorId : null,
+      errorNombre: errorId ? l.error?.name ?? null : null,
+      errorDescripcion: errorId ? l.error?.description ?? null : null,
+    });
+  }
+  return out;
 }
 
 /** Crea la etiqueta si no existe ("already exists" no es error). */

@@ -54,6 +54,12 @@ export interface DestinatarioInput {
 
 export type EstadoDestinatario = "PENDIENTE" | "ENVIANDO" | "OK" | "ERROR";
 
+/**
+ * Lo que hizo WhatsApp con un mensaje que Infobip aceptó (estado OK). Se
+ * resuelve unos segundos después del envío consultando los logs de Infobip.
+ */
+export type EstadoEntrega = "PENDIENTE" | "ENTREGADO" | "NO_ENTREGADO";
+
 export interface ResultadoDestinatario {
   id: number;
   fila: number;
@@ -63,6 +69,17 @@ export interface ResultadoDestinatario {
   reutilizada: boolean | null;
   error: string | null;
   advertencia: string | null;
+  entrega: EstadoEntrega | null;
+  entregaDetalle: string | null;
+}
+
+/** Texto legible para los errores de entrega más comunes de WhatsApp. */
+export function describirErrorEntrega(errorId: number | null, nombre: string | null, descripcion: string | null): string {
+  if (errorId === 7032) {
+    return "Meta bloqueó el mensaje por límite de frecuencia: el contacto recibió demasiadas plantillas de marketing en poco tiempo (7032).";
+  }
+  const base = [nombre, descripcion].filter(Boolean).join(": ");
+  return base ? `${base}${errorId ? ` (${errorId})` : ""}` : "WhatsApp no entregó el mensaje.";
 }
 
 export function extractVariables(text: string): number[] {
