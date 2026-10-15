@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { listarBroadcasts, type BroadcastResumen } from "../actions";
-import { BarraProgreso, EstadoBroadcast, estaActivo, formatoFecha } from "../ui";
+import { BarraProgreso, EstadoBroadcast, Spinner, UltimaActualizacion, estaActivo, formatoFecha } from "../ui";
 
 const PAGE_SIZE = 25;
 const BASE = "/modulos/microservicios/infobip-ext/broadcast";
@@ -21,6 +21,8 @@ export default function HistorialLista() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [tick, setTick] = useState(0);
+  const [actualizando, setActualizando] = useState(false);
+  const [ultimaCarga, setUltimaCarga] = useState<Date | null>(null);
 
   useEffect(() => {
     const t = setTimeout(() => {
@@ -35,6 +37,8 @@ export default function HistorialLista() {
     (async () => {
       const r = await listarBroadcasts({ page, pageSize: PAGE_SIZE, busqueda });
       if (cancelled) return;
+      setActualizando(false);
+      setUltimaCarga(new Date());
       if (r.success) {
         setRows(r.data.rows);
         setTotal(r.data.total);
@@ -67,13 +71,19 @@ export default function HistorialLista() {
             Todos los envíos masivos y cómo van. Se actualiza solo mientras hay envíos en curso.
           </p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <UltimaActualizacion fecha={ultimaCarga} automatico={hayActivos} />
           <button
             type="button"
-            onClick={() => setTick((n) => n + 1)}
-            className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50"
+            disabled={actualizando}
+            onClick={() => {
+              setActualizando(true);
+              setTick((n) => n + 1);
+            }}
+            className="inline-flex items-center gap-2 rounded-lg border border-gray-300 px-4 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50 disabled:opacity-60"
           >
-            Actualizar
+            {actualizando ? <Spinner /> : null}
+            {actualizando ? "Actualizando..." : "Actualizar"}
           </button>
           <Link
             href={BASE}

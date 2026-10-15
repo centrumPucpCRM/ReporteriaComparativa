@@ -115,6 +115,26 @@ export function EstadoFilaBadge({
   return <Badge color="amber">Sin confirmar</Badge>;
 }
 
+export function Spinner() {
+  return (
+    <svg className="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" className="opacity-25" />
+      <path d="M22 12a10 10 0 00-10-10" stroke="currentColor" strokeWidth="3" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+/** "Actualizado 18:40:12" + aviso si la página se refresca sola. */
+export function UltimaActualizacion({ fecha, automatico }: { fecha: Date | null; automatico?: boolean }) {
+  if (!fecha) return null;
+  return (
+    <span className="self-center text-xs text-gray-500">
+      Actualizado {fecha.toLocaleTimeString("es-PE", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
+      {automatico ? " · se actualiza solo" : ""}
+    </span>
+  );
+}
+
 export function formatoFecha(iso: string): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return iso;

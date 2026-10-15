@@ -20,6 +20,8 @@ import {
   BarraProgreso,
   EstadoBroadcast,
   EstadoFilaBadge,
+  Spinner,
+  UltimaActualizacion,
   descargarCsv,
   estaActivo,
   formatoFecha,
@@ -73,6 +75,8 @@ export default function HistorialDetalle({ id }: { id: number }) {
   const [descargando, setDescargando] = useState(false);
   const [verificando, setVerificando] = useState(false);
   const [verificacionesAuto, setVerificacionesAuto] = useState(0);
+  const [actualizando, setActualizando] = useState(false);
+  const [ultimaCarga, setUltimaCarga] = useState<Date | null>(null);
 
   useEffect(() => {
     const t = setTimeout(() => {
@@ -90,6 +94,8 @@ export default function HistorialDetalle({ id }: { id: number }) {
         listarDestinatarios({ broadcastId: id, filtro, telefono, page, pageSize: PAGE_SIZE }),
       ]);
       if (cancelled) return;
+      setActualizando(false);
+      setUltimaCarga(new Date());
       if (!d.success) {
         setError(d.error);
         return;
@@ -136,6 +142,12 @@ export default function HistorialDetalle({ id }: { id: number }) {
     setVerificando(false);
     if (!r.success) return setMensaje(r.error);
     setVerificacionesAuto(0);
+    setMensaje(null);
+    actualizar();
+  }
+
+  function actualizar() {
+    setActualizando(true);
     setTick((n) => n + 1);
   }
 
@@ -257,6 +269,12 @@ export default function HistorialDetalle({ id }: { id: number }) {
           </div>
         </dl>
 
+        {enviando ? (
+          <p className="inline-flex items-center gap-2 rounded-lg border border-sky-200 bg-sky-50 px-3 py-2 text-sm text-sky-800">
+            <Spinner />
+            Enviando por lotes desde esta pestaña. No la cierres hasta que termine.
+          </p>
+        ) : null}
         {otroEnviando ? (
           <p className="rounded-lg border border-sky-200 bg-sky-50 px-3 py-2 text-sm text-sky-800">
             Este broadcast se está enviando desde otra pestaña. El avance se actualiza solo.
@@ -309,9 +327,10 @@ export default function HistorialDetalle({ id }: { id: number }) {
               type="button"
               disabled={verificando}
               onClick={verificarAhora}
-              className="rounded-lg border border-sky-300 px-4 py-2 text-sm font-semibold text-sky-700 hover:bg-sky-50 disabled:opacity-40"
+              className="inline-flex items-center gap-2 rounded-lg border border-sky-300 px-4 py-2 text-sm font-semibold text-sky-700 hover:bg-sky-50 disabled:opacity-60"
             >
-              {verificando ? "Verificando..." : `Verificar entregas (${entregaPendiente})`}
+              {verificando ? <Spinner /> : null}
+              {verificando ? "Consultando a Infobip..." : `Verificar entregas (${entregaPendiente})`}
             </button>
           ) : null}
           <button
@@ -324,11 +343,14 @@ export default function HistorialDetalle({ id }: { id: number }) {
           </button>
           <button
             type="button"
-            onClick={() => setTick((n) => n + 1)}
-            className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50"
+            disabled={actualizando}
+            onClick={actualizar}
+            className="inline-flex items-center gap-2 rounded-lg border border-gray-300 px-4 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50 disabled:opacity-60"
           >
-            Actualizar
+            {actualizando ? <Spinner /> : null}
+            {actualizando ? "Actualizando..." : "Actualizar"}
           </button>
+          <UltimaActualizacion fecha={ultimaCarga} automatico={activo || (entregaPendiente > 0 && verificacionesAuto < MAX_VERIFICACIONES_AUTO)} />
         </div>
       </section>
 
