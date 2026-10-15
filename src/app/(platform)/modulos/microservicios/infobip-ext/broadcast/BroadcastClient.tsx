@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState, type ReactNode } from "react";
 import Link from "next/link";
 import Papa from "papaparse";
 import SearchSelect, { type SearchOption } from "./SearchSelect";
-import { Badge, BarraProgreso, EstadoFilaBadge, descargarCsv } from "./ui";
+import { Badge, BarraProgreso, EstadoFilaBadge, LeyendaProgreso, descargarCsv } from "./ui";
 import {
   agregarDestinatarios,
   cargarCatalogos,
@@ -838,7 +838,6 @@ function ProgresoEnvio({
   const resultados = envio.ids.map((id) => envio.resultados[id]).filter(Boolean);
   const hechos = resultados.length;
   const total = envio.ids.length;
-  const ok = resultados.filter((r) => r.estado === "OK").length;
   const errores = resultados.filter((r) => r.estado === "ERROR").length;
   const reutilizadas = resultados.filter((r) => r.estado === "OK" && r.reutilizada).length;
   const conAdvertencia = resultados.filter((r) => r.advertencia).length;
@@ -869,7 +868,15 @@ function ProgresoEnvio({
         <span className="text-2xl font-bold text-gray-900">{pct}%</span>
       </div>
 
-      <BarraProgreso total={total} ok={ok - noEntregados} error={errores + noEntregados} alto="h-3" />
+      <BarraProgreso
+        total={total}
+        entregados={entregados}
+        fallidos={errores + noEntregados}
+        confirmando={confirmando}
+        sinConfirmar={resultados.filter((r) => r.estado === "ENVIANDO").length}
+        alto="h-3"
+      />
+      <LeyendaProgreso />
 
       <div className="flex flex-wrap gap-2 text-sm">
         <Badge color="gray">

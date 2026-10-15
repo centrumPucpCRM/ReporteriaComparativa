@@ -34,26 +34,52 @@ export function descargarCsv(nombre: string, filas: Record<string, unknown>[]) {
   URL.revokeObjectURL(url);
 }
 
-/** Barra apilada: verde = enviados, rojo = error, ámbar = sin confirmar. */
+/**
+ * Barra apilada con lo que realmente pasó con cada contacto:
+ * verde = entregado en WhatsApp, rojo = error al enviar o no entregado,
+ * celeste = Infobip lo aceptó y falta que WhatsApp confirme la entrega,
+ * ámbar = envío cortado a mitad (sin confirmar). Gris = aún no procesado.
+ */
 export function BarraProgreso({
   total,
-  ok,
-  error,
+  entregados,
+  fallidos,
+  confirmando = 0,
   sinConfirmar = 0,
   alto = "h-2",
 }: {
   total: number;
-  ok: number;
-  error: number;
+  entregados: number;
+  fallidos: number;
+  confirmando?: number;
   sinConfirmar?: number;
   alto?: string;
 }) {
-  const pct = (n: number) => (total ? `${(n / total) * 100}%` : "0%");
+  const pct = (n: number) => (total ? `${(Math.max(0, n) / total) * 100}%` : "0%");
   return (
     <div className={`flex w-full overflow-hidden rounded-full bg-gray-100 ${alto}`}>
-      <div className="bg-emerald-500 transition-all" style={{ width: pct(ok) }} />
-      <div className="bg-red-500 transition-all" style={{ width: pct(error) }} />
+      <div className="bg-emerald-500 transition-all" style={{ width: pct(entregados) }} />
+      <div className="bg-red-500 transition-all" style={{ width: pct(fallidos) }} />
+      <div className="bg-sky-300 transition-all" style={{ width: pct(confirmando) }} />
       <div className="bg-amber-400 transition-all" style={{ width: pct(sinConfirmar) }} />
+    </div>
+  );
+}
+
+export function LeyendaProgreso() {
+  const item = (color: string, texto: string) => (
+    <span className="inline-flex items-center gap-1.5">
+      <span className={`h-2 w-2 rounded-full ${color}`} />
+      {texto}
+    </span>
+  );
+  return (
+    <div className="flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-gray-500">
+      {item("bg-emerald-500", "Entregado")}
+      {item("bg-red-500", "Error o no entregado")}
+      {item("bg-sky-300", "Confirmando entrega")}
+      {item("bg-amber-400", "Envío cortado")}
+      {item("bg-gray-200", "Pendiente de enviar")}
     </div>
   );
 }
@@ -71,13 +97,33 @@ export function estaActivo(b: { estado: string; updated_at: string }): boolean {
 export function EstadoBroadcast({
   b,
 }: {
-  b: { estado: string; updated_at: string; fallidos: number; no_entregados?: number };
+  b: {
+    estado: string;
+    updated_at: string;
+    fallidos: number;
+    enviados?: number;
+    entregados?: number;
+    no_entregados?: number;
+  };
 }) {
   if (b.estado === "FINALIZADO") {
-    return b.fallidos > 0 || (b.no_entregados ?? 0) > 0 ? (
+    const noEntregados = b.no_entregados ?? 0;
+    const confirmando = Math.max(0, (b.enviados ?? 0) - (b.entregados ?? 0) - noEntregados);
+    if (confirmando > 0) {
+      return (
+        <Badge color="sky">
+          <span className="mr-1.5 inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-sky-600" />
+          Confirmando entrega
+        </Badge>
+      );
+    }
+    if ((b.entregados ?? 0) === 0 && b.fallidos + noEntregados > 0) {
+      return <Badge color="red">Ninguno entregado</Badge>;
+    }
+    return b.fallidos > 0 || noEntregados > 0 ? (
       <Badge color="amber">Finalizado con errores</Badge>
     ) : (
-      <Badge color="emerald">Finalizado</Badge>
+      <Badge color="emerald">Entregado</Badge>
     );
   }
   if (estaActivo(b)) {

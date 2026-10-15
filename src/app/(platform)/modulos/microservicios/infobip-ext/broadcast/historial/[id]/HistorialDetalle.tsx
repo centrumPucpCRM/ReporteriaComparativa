@@ -20,6 +20,7 @@ import {
   BarraProgreso,
   EstadoBroadcast,
   EstadoFilaBadge,
+  LeyendaProgreso,
   Spinner,
   UltimaActualizacion,
   descargarCsv,
@@ -237,18 +238,28 @@ export default function HistorialDetalle({ id }: { id: number }) {
             <h1 className="text-2xl font-bold text-gray-900">{b.campana}</h1>
           </div>
           <div className="flex items-center gap-3">
-            <EstadoBroadcast b={b} />
+            <EstadoBroadcast
+              b={{
+                ...b,
+                enviados: conteo.ok,
+                fallidos: conteo.error,
+                entregados: conteo.entregados,
+                no_entregados: conteo.noEntregados,
+              }}
+            />
             <span className="text-2xl font-bold text-gray-900">{pct}%</span>
           </div>
         </div>
 
         <BarraProgreso
           total={totalDest}
-          ok={conteo.ok - conteo.noEntregados}
-          error={conteo.error + conteo.noEntregados}
+          entregados={conteo.entregados}
+          fallidos={conteo.error + conteo.noEntregados}
+          confirmando={conteo.entregaPendiente}
           sinConfirmar={conteo.sinConfirmar}
           alto="h-3"
         />
+        <LeyendaProgreso />
 
         <Conteos conteo={conteo} total={totalDest} />
 
