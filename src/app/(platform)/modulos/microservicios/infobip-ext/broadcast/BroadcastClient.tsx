@@ -1,8 +1,10 @@
 "use client";
 
 import { useEffect, useMemo, useState, type ReactNode } from "react";
+import Link from "next/link";
 import Papa from "papaparse";
 import SearchSelect, { type SearchOption } from "./SearchSelect";
+import { Badge, BarraProgreso, descargarCsv } from "./ui";
 import {
   agregarDestinatarios,
   cargarCatalogos,
@@ -79,17 +81,6 @@ function resolver<T extends { id: string; name: string }>(items: T[], buscado: s
   if (!buscado) return null;
   const n = normalizarTexto(buscado);
   return (items.find((i) => i.id === buscado) ?? items.find((i) => normalizarTexto(i.name) === n))?.id ?? null;
-}
-
-function descargarCsv(nombre: string, filas: Record<string, unknown>[]) {
-  // BOM para que Excel abra bien las tildes.
-  const blob = new Blob(["﻿" + Papa.unparse(filas)], { type: "text/csv;charset=utf-8" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = nombre;
-  a.click();
-  URL.revokeObjectURL(url);
 }
 
 export default function BroadcastClient({ colaInicial, asesorInicial }: Props) {
@@ -714,7 +705,13 @@ function Contenedor({ children }: { children: ReactNode }) {
         <h1 className="text-2xl font-bold text-gray-900">Broadcast</h1>
         <p className="mt-1 text-sm text-gray-600">
           Envío masivo de plantillas WhatsApp que crea (o reutiliza) la conversación de cada contacto en la cola
-          elegida, a diferencia del broadcast nativo de Infobip.
+          elegida, a diferencia del broadcast nativo de Infobip.{" "}
+          <Link
+            href="/modulos/microservicios/infobip-ext/broadcast/historial"
+            className="font-semibold text-sky-700 hover:underline"
+          >
+            Ver historial de broadcasts →
+          </Link>
         </p>
       </div>
       {children}
@@ -843,9 +840,7 @@ function ProgresoEnvio({
         <span className="text-2xl font-bold text-gray-900">{pct}%</span>
       </div>
 
-      <div className="h-3 w-full overflow-hidden rounded-full bg-gray-100">
-        <div className="h-full bg-emerald-500 transition-all" style={{ width: `${pct}%` }} />
-      </div>
+      <BarraProgreso total={total} ok={ok} error={errores} alto="h-3" />
 
       <div className="flex flex-wrap gap-2 text-sm">
         <Badge color="gray">
@@ -909,6 +904,12 @@ function ProgresoEnvio({
         >
           Descargar resultados
         </button>
+        <Link
+          href={`/modulos/microservicios/infobip-ext/broadcast/historial/${envio.broadcastId}`}
+          className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50"
+        >
+          Ver en historial
+        </Link>
         {!envio.procesando ? (
           <button
             type="button"
@@ -962,22 +963,6 @@ function ProgresoEnvio({
         </table>
       </div>
     </section>
-  );
-}
-
-const BADGE_COLORS = {
-  gray: "bg-gray-100 text-gray-700",
-  emerald: "bg-emerald-100 text-emerald-800",
-  red: "bg-red-100 text-red-700",
-  amber: "bg-amber-100 text-amber-800",
-  sky: "bg-sky-100 text-sky-800",
-} as const;
-
-function Badge({ color, children }: { color: keyof typeof BADGE_COLORS; children: ReactNode }) {
-  return (
-    <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-semibold ${BADGE_COLORS[color]}`}>
-      {children}
-    </span>
   );
 }
 

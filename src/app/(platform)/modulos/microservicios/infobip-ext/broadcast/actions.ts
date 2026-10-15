@@ -437,6 +437,9 @@ export async function enviarLote(
       return toResultado(r);
     });
 
+    // Contadores al día después de cada lote: el historial los muestra en vivo
+    // y `updated_at` sirve para saber si el envío sigue activo.
+    await actualizarContadores(broadcastId);
     return resultados;
   });
 }
@@ -476,28 +479,189 @@ async function contar(broadcastId: number, estado: EstadoDestinatario): Promise<
 }
 
 /** Recalcula los contadores del broadcast y lo cierra si no queda nada pendiente. */
-export async function finalizarBroadcast(
-  broadcastId: number,
-): Promise<Result<{ ok: number; error: number; pendientes: number; sinConfirmar: number }>> {
+async function actualizarContadores(broadcastId: number): Promise<ConteoEstados> {
+  const [ok, error, pendientes, sinConfirmar] = await Promise.all([
+    contar(broadcastId, "OK"),
+    contar(broadcastId, "ERROR"),
+    contar(broadcastId, "PENDIENTE"),
+    contar(broadcastId, "ENVIANDO"),
+  ]);
+  await db()
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    .from("broadcast" as any)
+    .update({
+      enviados: ok,
+      fallidos: error,
+      estado: pendientes === 0 ? "FINALIZADO" : "EN_CURSO",
+      updated_at: new Date().toISOString(),
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any)
+    .eq("id", broadcastId);
+  return { ok, error, pendientes, sinConfirmar };
+}
+
+export async function finalizarBroadcast(broadcastId: number): Promise<Result<ConteoEstados>> {
   return safe(async () => {
     await requireUser();
-    const [ok, error, pendientes, sinConfirmar] = await Promise.all([
+    return actualizarContadores(broadcastId);
+  });
+}
+
+// ==================== Historial ====================
+
+export interface ConteoEstados {
+  ok: number;
+  error: number;
+  pendientes: number;
+  sinConfirmar: number;
+}
+
+export interface BroadcastResumen {
+  id: number;
+  created_at: string;
+  updated_at: string;
+  creado_por: string | null;
+  campana: string;
+  queue_id: string;
+  queue_nombre: string | null;
+  agent_nombre: string | null;
+  sender: string;
+  template_nombre: string;
+  template_idioma: string;
+  total: number;
+  enviados: number;
+  fallidos: number;
+  estado: string;
+}
+
+export async function listarBroadcasts(params: {
+  page: number;
+  pageSize: number;
+  busqueda?: string;
+}): Promise<Result<{ rows: BroadcastResumen[]; total: number }>> {
+  return safe(async () => {
+    await requireUser();
+    let q = db()
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      .from("broadcast" as any)
+      .select(
+        "id, created_at, updated_at, creado_por, campana, queue_id, queue_nombre, agent_nombre, sender, template_nombre, template_idioma, total, enviados, fallidos, estado",
+        { count: "exact" },
+      )
+      .order("id", { ascending: false });
+    const b = params.busqueda?.trim().replace(/[%,()]/g, " ");
+    if (b) {
+      q = q.or(
+        `campana.ilike.%${b}%,template_nombre.ilike.%${b}%,queue_nombre.ilike.%${b}%,agent_nombre.ilike.%${b}%,creado_por.ilike.%${b}%`,
+      );
+    }
+    const from = (params.page - 1) * params.pageSize;
+    const { data, count, error } = await q.range(from, from + params.pageSize - 1);
+    if (error) throw new Error(error.message);
+    return { rows: (data ?? []) as unknown as BroadcastResumen[], total: count ?? 0 };
+  });
+}
+
+export async function obtenerBroadcast(
+  broadcastId: number,
+): Promise<Result<{ broadcast: BroadcastResumen & { template_variables: number[]; mapeo: Mapeo | null }; conteo: ConteoEstados }>> {
+  return safe(async () => {
+    await requireUser();
+    const [{ data, error }, ok, err, pendientes, sinConfirmar] = await Promise.all([
+      db()
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        .from("broadcast" as any)
+        .select("*")
+        .eq("id", broadcastId)
+        .single(),
       contar(broadcastId, "OK"),
       contar(broadcastId, "ERROR"),
       contar(broadcastId, "PENDIENTE"),
       contar(broadcastId, "ENVIANDO"),
     ]);
-    await db()
+    if (error || !data) throw new Error(`Broadcast ${broadcastId} no encontrado.`);
+    return {
+      broadcast: data as unknown as BroadcastResumen & { template_variables: number[]; mapeo: Mapeo | null },
+      conteo: { ok, error: err, pendientes, sinConfirmar },
+    };
+  });
+}
+
+export type FiltroDestinatario = EstadoDestinatario | "ADVERTENCIA" | "TODOS";
+
+export async function listarDestinatarios(params: {
+  broadcastId: number;
+  filtro: FiltroDestinatario;
+  telefono?: string;
+  page: number;
+  pageSize: number;
+}): Promise<Result<{ rows: (ResultadoDestinatario & { parametros: Record<string, string> })[]; total: number }>> {
+  return safe(async () => {
+    await requireUser();
+    let q = db()
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      .from("broadcast" as any)
-      .update({
-        enviados: ok,
-        fallidos: error,
-        estado: pendientes === 0 ? "FINALIZADO" : "EN_CURSO",
-        updated_at: new Date().toISOString(),
+      .from("broadcast_destinatario" as any)
+      .select("*", { count: "exact" })
+      .eq("broadcast_id", params.broadcastId)
+      .order("fila", { ascending: true });
+    if (params.filtro === "ADVERTENCIA") q = q.not("advertencia", "is", null);
+    else if (params.filtro !== "TODOS") q = q.eq("estado", params.filtro);
+    const tel = params.telefono?.replace(/\D/g, "");
+    if (tel) q = q.ilike("telefono", `%${tel}%`);
+    const from = (params.page - 1) * params.pageSize;
+    const { data, count, error } = await q.range(from, from + params.pageSize - 1);
+    if (error) throw new Error(error.message);
+    const rows = ((data ?? []) as unknown as DestinatarioRow[]).map((r) => ({
+      ...toResultado(r),
+      parametros: r.parametros ?? {},
+    }));
+    return { rows, total: count ?? 0 };
+  });
+}
+
+/** Ids de filas aún PENDIENTE, para continuar un envío que quedó a medias. */
+export async function idsPendientes(broadcastId: number): Promise<Result<number[]>> {
+  return safe(async () => {
+    await requireUser();
+    const ids: number[] = [];
+    for (let from = 0; ; from += 1000) {
+      const { data, error } = await db()
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      } as any)
-      .eq("id", broadcastId);
-    return { ok, error, pendientes, sinConfirmar };
+        .from("broadcast_destinatario" as any)
+        .select("id")
+        .eq("broadcast_id", broadcastId)
+        .eq("estado", "PENDIENTE")
+        .order("fila", { ascending: true })
+        .range(from, from + 999);
+      if (error) throw new Error(error.message);
+      const page = (data ?? []) as unknown as { id: number }[];
+      ids.push(...page.map((r) => r.id));
+      if (page.length < 1000) break;
+    }
+    return ids;
+  });
+}
+
+/** Todas las filas del broadcast para descargar como CSV. */
+export async function exportarDestinatarios(
+  broadcastId: number,
+): Promise<Result<(ResultadoDestinatario & { parametros: Record<string, string> })[]>> {
+  return safe(async () => {
+    await requireUser();
+    const out: (ResultadoDestinatario & { parametros: Record<string, string> })[] = [];
+    for (let from = 0; ; from += 1000) {
+      const { data, error } = await db()
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        .from("broadcast_destinatario" as any)
+        .select("*")
+        .eq("broadcast_id", broadcastId)
+        .order("fila", { ascending: true })
+        .range(from, from + 999);
+      if (error) throw new Error(error.message);
+      const page = (data ?? []) as unknown as DestinatarioRow[];
+      out.push(...page.map((r) => ({ ...toResultado(r), parametros: r.parametros ?? {} })));
+      if (page.length < 1000) break;
+    }
+    return out;
   });
 }

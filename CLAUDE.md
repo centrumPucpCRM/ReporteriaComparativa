@@ -147,6 +147,7 @@ The per-table `actions.ts` must be a `"use server"` module that re-exports thin 
 - **Reutilización**: Infobip no permite buscar conversaciones por teléfono, así que se busca la última en `conversation_lead_relation` por `(telefono_contacto, sender)`; si en Infobip está OPEN/WAITING/SOLVED se reutiliza (PATCH `queueId` + PUT `assignee`), si no se crea una nueva y se registra ahí.
 - **Lotes e idempotencia**: el navegador manda lotes de 10 a `enviarLote`; cada fila se reclama `PENDIENTE → ENVIANDO` atómicamente, así un lote repetido no reenvía. `ERROR` = la plantilla no salió (reintentable); fallos posteriores (etiquetas, registro) son `advertencia` sobre un `OK`. Una fila que queda en `ENVIANDO` no se reintenta sola.
 - Tablas `Infobip_ext.broadcast` y `broadcast_destinatario`: SQL en [sql/infobip_ext_broadcast.sql](sql/infobip_ext_broadcast.sql).
+- **Historial** (`broadcast/historial` y `historial/[id]`): lista con progreso en vivo y detalle por contacto. Cada lote recalcula `enviados`/`fallidos` y toca `updated_at`; un `EN_CURSO` sin actividad por 2 min se muestra como "Detenido" (se cerró la pestaña) y se puede **continuar** desde el detalle, que vuelve a correr los lotes de las filas `PENDIENTE`.
 
 ## Environment
 
