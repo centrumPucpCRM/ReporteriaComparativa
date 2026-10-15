@@ -124,6 +124,28 @@ export function normalizarTelefono(raw: string | null | undefined): string | nul
   return t;
 }
 
+/**
+ * Tarifa en USD por mensaje de plantilla entregado, según la categoría de la
+ * plantilla (WhatsApp cobra por categoría y país de destino; aquí, Perú).
+ *
+ * MARKETING: sale de la estimación de Infobip para un broadcast real
+ * (US$ 97,85 / 1.475 mensajes = 0,0663). Las categorías sin tarifa se
+ * muestran como "sin tarifa configurada" en vez de inventar un monto:
+ * agregarlas aquí cuando se confirmen con Infobip.
+ */
+export const TARIFAS_USD: Record<string, number> = {
+  MARKETING: 0.0663,
+};
+
+export function tarifaPorCategoria(categoria: string | null | undefined): number | null {
+  if (!categoria) return null;
+  return TARIFAS_USD[categoria.toUpperCase()] ?? null;
+}
+
+export function formatoUsd(monto: number): string {
+  return `US$ ${monto.toLocaleString("es-PE", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
 /** Comparación sin tildes ni mayúsculas, para los buscadores. */
 export function normalizarTexto(s: string): string {
   return s.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().trim();

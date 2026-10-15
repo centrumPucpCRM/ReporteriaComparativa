@@ -161,6 +161,50 @@ export function EstadoFilaBadge({
   return <Badge color="amber">Sin confirmar</Badge>;
 }
 
+/** Celda del resumen (estilo "Resumen de Broadcast" de Infobip). */
+export function CeldaResumen({
+  label,
+  ayuda,
+  children,
+  destacado,
+}: {
+  label: string;
+  /** Explicación corta que aparece al pasar el mouse por el ícono (i). */
+  ayuda?: string;
+  children: ReactNode;
+  destacado?: boolean;
+}) {
+  return (
+    <div className="min-w-0 bg-white px-4 py-3">
+      <p className="flex items-center gap-1 text-xs font-semibold text-gray-500">
+        {label}
+        {ayuda ? (
+          <span
+            title={ayuda}
+            className="inline-flex h-3.5 w-3.5 cursor-help items-center justify-center rounded-full border border-gray-400 text-[9px] font-bold text-gray-500"
+          >
+            i
+          </span>
+        ) : null}
+      </p>
+      <div className={`mt-1 truncate font-bold ${destacado ? "text-xl text-gray-900" : "text-lg text-gray-800"}`}>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+/** Grilla con bordes entre celdas, como el resumen de Infobip. */
+export function GrillaDatos({ children, columnas = 3 }: { children: ReactNode; columnas?: 2 | 3 | 4 }) {
+  const cols = { 2: "sm:grid-cols-2", 3: "sm:grid-cols-3", 4: "sm:grid-cols-2 lg:grid-cols-4" }[columnas];
+  return (
+    // gap-px sobre fondo gris = líneas de 1px entre celdas, sin bordes dobles.
+    <div className={`grid grid-cols-1 ${cols} gap-px overflow-hidden rounded-lg border border-gray-200 bg-gray-200`}>
+      {children}
+    </div>
+  );
+}
+
 export function Spinner() {
   return (
     <svg className="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none" aria-hidden="true">

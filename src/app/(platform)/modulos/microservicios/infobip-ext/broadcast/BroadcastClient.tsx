@@ -4,7 +4,15 @@ import { useEffect, useMemo, useState, type ReactNode } from "react";
 import Link from "next/link";
 import Papa from "papaparse";
 import SearchSelect, { type SearchOption } from "./SearchSelect";
-import { Badge, BarraProgreso, EstadoFilaBadge, LeyendaProgreso, descargarCsv } from "./ui";
+import {
+  Badge,
+  BarraProgreso,
+  CeldaResumen,
+  EstadoFilaBadge,
+  GrillaDatos,
+  LeyendaProgreso,
+  descargarCsv,
+} from "./ui";
 import {
   agregarDestinatarios,
   cargarCatalogos,
@@ -16,10 +24,12 @@ import {
   verificarEntregas,
 } from "./actions";
 import {
+  formatoUsd,
   motivoNoSoportada,
   normalizarTelefono,
   normalizarTexto,
   renderTemplate,
+  tarifaPorCategoria,
   type AgentInfo,
   type DestinatarioInput,
   type FuenteVariable,
@@ -246,6 +256,9 @@ export default function BroadcastClient({ colaInicial, asesorInicial }: Props) {
 
   const validas = filasValidadas.filter((f) => !f.problema);
   const invalidas = filasValidadas.filter((f) => f.problema);
+
+  const tarifa = plantilla ? tarifaPorCategoria(plantilla.category) : null;
+  const costoEstimado = tarifa !== null ? validas.length * tarifa : null;
 
   const queue = catalogos?.queues.find((q) => q.id === queueId) ?? null;
   const agent = catalogos?.agents.find((a) => a.id === agentId) ?? null;
@@ -663,7 +676,73 @@ export default function BroadcastClient({ colaInicial, asesorInicial }: Props) {
         ) : null}
       </Paso>
 
-      {/* 4. Envío */}
+      {/* 4. Resumen y costo */}
+      {plantilla && csv ? (
+        <Paso numero={4} titulo="Resumen del broadcast" descripcion="Revisa a cuántos llegará y cuánto costará antes de enviar.">
+          <div className="space-y-4">
+            <GrillaDatos columnas={3}>
+              <CeldaResumen label="Lista de receptores" ayuda="Archivo CSV cargado.">
+                <span className="text-base">{csv.archivo}</span>
+              </CeldaResumen>
+              <CeldaResumen label="Remitente" ayuda="Número de WhatsApp desde el que sale el mensaje.">
+                <span className="font-mono">{sender ?? "—"}</span>
+              </CeldaResumen>
+              <CeldaResumen label="Filas en el archivo" ayuda="Total de filas del CSV, sin contar el encabezado.">
+                {csv.filas.length.toLocaleString("es-PE")}
+              </CeldaResumen>
+              <CeldaResumen
+                label="Destinos de entrega"
+                ayuda="Teléfonos válidos y únicos, con todas las variables completas: son los que se van a enviar."
+              >
+                {validas.length.toLocaleString("es-PE")}
+              </CeldaResumen>
+              <CeldaResumen
+                label="Mensajes omitidos"
+                ayuda="Filas que no se envían: teléfono vacío, inválido o repetido, o alguna variable vacía."
+              >
+                <span className={invalidas.length ? "text-red-600" : undefined}>
+                  {invalidas.length.toLocaleString("es-PE")}
+                </span>
+              </CeldaResumen>
+              <CeldaResumen label="Plantilla" ayuda="Nombre y categoría de la plantilla; la categoría define la tarifa.">
+                <span className="text-base">{plantilla.category}</span>
+              </CeldaResumen>
+            </GrillaDatos>
+
+            <div>
+              <p className="mb-2 text-sm font-bold text-gray-900">Desglose del tráfico</p>
+              <GrillaDatos columnas={2}>
+                <CeldaResumen label="Tráfico estimado" ayuda="Mensajes que se van a enviar (uno por destino de entrega).">
+                  {validas.length.toLocaleString("es-PE")}
+                </CeldaResumen>
+                <CeldaResumen
+                  label="Costo estimado"
+                  destacado
+                  ayuda={
+                    tarifa !== null
+                      ? `${formatoUsd(tarifa)} por mensaje ${plantilla.category}. WhatsApp cobra los mensajes entregados: si alguno no se entrega, el costo real es menor.`
+                      : `No hay tarifa configurada para plantillas ${plantilla.category}.`
+                  }
+                >
+                  {costoEstimado !== null ? (
+                    formatoUsd(costoEstimado)
+                  ) : (
+                    <span className="text-base font-semibold text-amber-700">Sin tarifa para {plantilla.category}</span>
+                  )}
+                </CeldaResumen>
+              </GrillaDatos>
+              {tarifa !== null ? (
+                <p className="mt-1.5 text-[11px] text-gray-500">
+                  {formatoUsd(tarifa)} por mensaje {plantilla.category.toLowerCase()} entregado. Es una estimación: el
+                  monto final lo factura Infobip.
+                </p>
+              ) : null}
+            </div>
+          </div>
+        </Paso>
+      ) : null}
+
+      {/* 5. Envío */}
       <div className="flex flex-col items-end gap-2">
         {errorEnvio ? <p className="text-sm text-red-600">{errorEnvio}</p> : null}
         <button
@@ -687,6 +766,9 @@ export default function BroadcastClient({ colaInicial, asesorInicial }: Props) {
           <p className="mt-1 text-sm text-gray-600">Se enviarán mensajes reales de WhatsApp. No se puede deshacer.</p>
           <dl className="mt-4 space-y-1.5 text-sm">
             <Dato label="Contactos">{validas.length}</Dato>
+            <Dato label="Costo estimado">
+              {costoEstimado !== null ? formatoUsd(costoEstimado) : `Sin tarifa para ${plantilla.category}`}
+            </Dato>
             <Dato label="Campaña">{campana.trim()}</Dato>
             <Dato label="Cola">{queue.name}</Dato>
             <Dato label="Asesor">{agent?.name ?? "Sin asesor (queda en la cola)"}</Dato>

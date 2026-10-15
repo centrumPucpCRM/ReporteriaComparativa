@@ -14,10 +14,12 @@ import {
   type ConteoEstados,
   type FiltroDestinatario,
 } from "../../actions";
-import type { Mapeo, ResultadoDestinatario } from "@/lib/broadcast";
+import { formatoUsd, tarifaPorCategoria, type Mapeo, type ResultadoDestinatario } from "@/lib/broadcast";
 import {
   Badge,
   BarraProgreso,
+  CeldaResumen,
+  GrillaDatos,
   EstadoBroadcast,
   EstadoFilaBadge,
   LeyendaProgreso,
@@ -280,6 +282,8 @@ export default function HistorialDetalle({ id }: { id: number }) {
           </div>
         </dl>
 
+        <ResumenCosto b={b} conteo={conteo} total={totalDest} />
+
         {enviando ? (
           <p className="inline-flex items-center gap-2 rounded-lg border border-sky-200 bg-sky-50 px-3 py-2 text-sm text-sky-800">
             <Spinner />
@@ -465,6 +469,88 @@ function Volver() {
     <Link href={`${BASE}/historial`} className="text-sm font-semibold text-sky-700 hover:underline">
       ← Historial de broadcasts
     </Link>
+  );
+}
+
+function ResumenCosto({
+  b,
+  conteo,
+  total,
+}: {
+  b: Detalle["broadcast"];
+  conteo: ConteoEstados;
+  total: number;
+}) {
+  const tarifa = tarifaPorCategoria(b.template_categoria);
+  const categoria = b.template_categoria ?? "desconocida";
+  return (
+    <div className="space-y-3">
+      <div>
+        <p className="mb-2 text-sm font-bold text-gray-900">Resumen del broadcast</p>
+        <GrillaDatos columnas={3}>
+          <CeldaResumen label="Remitente" ayuda="Número de WhatsApp desde el que salió el mensaje.">
+            <span className="font-mono">{b.sender}</span>
+          </CeldaResumen>
+          <CeldaResumen label="Destinos totales" ayuda="Contactos válidos registrados en este broadcast.">
+            {total.toLocaleString("es-PE")}
+          </CeldaResumen>
+          <CeldaResumen label="Aceptados por Infobip" ayuda="Mensajes que Infobip aceptó para enviar.">
+            {conteo.ok.toLocaleString("es-PE")}
+          </CeldaResumen>
+          <CeldaResumen label="Entregados" ayuda="WhatsApp confirmó que el mensaje llegó al teléfono.">
+            <span className="text-emerald-700">{conteo.entregados.toLocaleString("es-PE")}</span>
+          </CeldaResumen>
+          <CeldaResumen
+            label="No entregados"
+            ayuda="Infobip lo aceptó pero WhatsApp no lo entregó (p. ej. Meta lo bloqueó por frecuencia)."
+          >
+            <span className={conteo.noEntregados ? "text-red-600" : undefined}>
+              {conteo.noEntregados.toLocaleString("es-PE")}
+            </span>
+          </CeldaResumen>
+          <CeldaResumen label="Errores al enviar" ayuda="Infobip rechazó el envío: el mensaje no salió.">
+            <span className={conteo.error ? "text-red-600" : undefined}>{conteo.error.toLocaleString("es-PE")}</span>
+          </CeldaResumen>
+        </GrillaDatos>
+      </div>
+      <div>
+        <p className="mb-2 text-sm font-bold text-gray-900">Desglose del tráfico</p>
+        <GrillaDatos columnas={conteo.entregaPendiente ? 3 : 2}>
+          <CeldaResumen label="Tráfico" ayuda="Mensajes que salieron hacia WhatsApp (aceptados por Infobip).">
+            {conteo.ok.toLocaleString("es-PE")}
+          </CeldaResumen>
+          <CeldaResumen
+            label="Costo estimado"
+            destacado
+            ayuda={
+              tarifa !== null
+                ? `${formatoUsd(tarifa)} por mensaje ${categoria} entregado. WhatsApp cobra solo los entregados.`
+                : `No hay tarifa configurada para plantillas ${categoria}.`
+            }
+          >
+            {tarifa !== null ? (
+              formatoUsd(conteo.entregados * tarifa)
+            ) : (
+              <span className="text-base font-semibold text-amber-700">Sin tarifa para {categoria}</span>
+            )}
+          </CeldaResumen>
+          {conteo.entregaPendiente && tarifa !== null ? (
+            <CeldaResumen
+              label="Costo máximo"
+              ayuda="Si también se entregan los mensajes que faltan confirmar."
+            >
+              {formatoUsd((conteo.entregados + conteo.entregaPendiente) * tarifa)}
+            </CeldaResumen>
+          ) : null}
+        </GrillaDatos>
+        {tarifa !== null ? (
+          <p className="mt-1.5 text-[11px] text-gray-500">
+            Plantilla {categoria.toLowerCase()} · {formatoUsd(tarifa)} por mensaje entregado. Es una estimación: el
+            monto final lo factura Infobip.
+          </p>
+        ) : null}
+      </div>
+    </div>
   );
 }
 

@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { listarBroadcasts, verificarEntregas, type BroadcastResumen } from "../actions";
+import { formatoUsd, tarifaPorCategoria } from "@/lib/broadcast";
 import {
   Badge,
   BarraProgreso,
@@ -240,13 +241,34 @@ function TarjetaBroadcast({ b }: { b: BroadcastResumen }) {
         </span>
       </div>
 
-      <div className="mt-2 flex flex-wrap gap-1.5">
+      <div className="mt-2 flex flex-wrap items-center gap-1.5">
         {b.entregados || !confirmando ? <Badge color="emerald">{b.entregados} entregados</Badge> : null}
         {b.no_entregados ? <Badge color="red">{b.no_entregados} no entregados</Badge> : null}
         {confirmando ? <Badge color="sky">{confirmando} confirmando entrega</Badge> : null}
         {b.fallidos ? <Badge color="red">{b.fallidos} con error al enviar</Badge> : null}
+        <Costo b={b} confirmando={confirmando} />
       </div>
     </Link>
+  );
+}
+
+/** Costo estimado: WhatsApp cobra los entregados; lo que falta confirmar suma "hasta". */
+function Costo({ b, confirmando }: { b: BroadcastResumen; confirmando: number }) {
+  const tarifa = tarifaPorCategoria(b.template_categoria);
+  if (tarifa === null) {
+    return (
+      <span className="ml-auto text-xs text-gray-400">
+        {b.template_categoria ? `Sin tarifa para ${b.template_categoria}` : "Costo no disponible"}
+      </span>
+    );
+  }
+  return (
+    <span className="ml-auto text-sm text-gray-600" title={`${formatoUsd(tarifa)} por mensaje ${b.template_categoria} entregado`}>
+      Costo estimado <span className="font-bold text-gray-900">{formatoUsd(b.entregados * tarifa)}</span>
+      {confirmando ? (
+        <span className="text-xs text-gray-500"> (hasta {formatoUsd((b.entregados + confirmando) * tarifa)})</span>
+      ) : null}
+    </span>
   );
 }
 

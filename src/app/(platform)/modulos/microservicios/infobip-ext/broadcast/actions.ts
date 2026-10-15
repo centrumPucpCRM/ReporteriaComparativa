@@ -816,6 +816,30 @@ export interface BroadcastResumen {
   entregados: number;
   no_entregados: number;
   estado: string;
+  /** Categoría de la plantilla en Infobip (null si no se pudo consultar). */
+  template_categoria: string | null;
+}
+
+/**
+ * Categoría (MARKETING, UTILITY...) de la plantilla de cada broadcast, para
+ * estimar el costo. Una consulta a Infobip por línea distinta; si falla, la
+ * categoría queda null y el historial se muestra igual, sin costo.
+ */
+async function categoriasDePlantillas(
+  items: { sender: string; template_nombre: string; template_idioma: string }[],
+): Promise<(string | null)[]> {
+  const porSender = new Map<string, Promise<Map<string, string>>>();
+  for (const sender of new Set(items.map((i) => i.sender))) {
+    porSender.set(
+      sender,
+      listTemplates(sender)
+        .then((ts) => new Map(ts.map((t) => [`${t.name}|${t.language}`, t.category])))
+        .catch(() => new Map<string, string>()),
+    );
+  }
+  return Promise.all(
+    items.map(async (i) => (await porSender.get(i.sender)!).get(`${i.template_nombre}|${i.template_idioma}`) ?? null),
+  );
 }
 
 export async function listarBroadcasts(params: {
@@ -842,7 +866,12 @@ export async function listarBroadcasts(params: {
     const from = (params.page - 1) * params.pageSize;
     const { data, count, error } = await q.range(from, from + params.pageSize - 1);
     if (error) throw new Error(error.message);
-    return { rows: (data ?? []) as unknown as BroadcastResumen[], total: count ?? 0 };
+    const rows = (data ?? []) as unknown as BroadcastResumen[];
+    const categorias = await categoriasDePlantillas(rows);
+    return {
+      rows: rows.map((r, i) => ({ ...r, template_categoria: categorias[i] })),
+      total: count ?? 0,
+    };
   });
 }
 
@@ -856,10 +885,9 @@ export async function obtenerBroadcast(
       calcularConteos(broadcastId),
     ]);
     if (error || !data) throw new Error(`Broadcast ${broadcastId} no encontrado.`);
-    return {
-      broadcast: data as unknown as BroadcastResumen & { template_variables: number[]; mapeo: Mapeo | null },
-      conteo,
-    };
+    const broadcast = data as unknown as BroadcastResumen & { template_variables: number[]; mapeo: Mapeo | null };
+    const [categoria] = await categoriasDePlantillas([broadcast]);
+    return { broadcast: { ...broadcast, template_categoria: categoria }, conteo };
   });
 }
 
