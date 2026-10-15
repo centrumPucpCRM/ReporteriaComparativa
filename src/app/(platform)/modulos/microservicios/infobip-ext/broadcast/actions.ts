@@ -13,6 +13,7 @@ import {
   listTemplates,
   moveConversationQueue,
   sendTemplate,
+  type ConversationInfo,
 } from "@/lib/infobip";
 import {
   motivoNoSoportada,
@@ -41,6 +42,8 @@ const MAX_INSERT = 500;
 function db() {
   return createAdminClient().schema(SCHEMA);
 }
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 async function safe<T>(fn: () => Promise<T>): Promise<Result<T>> {
   try {
@@ -263,22 +266,194 @@ async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promis
   return out;
 }
 
-/**
- * Última conversación conocida para (teléfono, línea). Infobip no permite
- * buscar conversaciones por teléfono, así que se usa el espejo que mantiene
- * InfobipExt (y este mismo broadcast) en `conversation_lead_relation`.
- */
-async function buscarConversacionPrevia(telefono: string, sender: string): Promise<string | null> {
-  const { data } = await db()
+// ==================== Resolución de conversación ====================
+//
+// Infobip no permite buscar conversaciones por teléfono (ni el listado ni el
+// detalle tienen ese filtro), así que el broadcast lleva su propio registro en
+// `broadcast_conversacion`: una fila por conversación con su estado. Un índice
+// único parcial permite UNA sola fila no CERRADA por (teléfono, número
+// Infobip): si dos broadcasts llegan a la vez al mismo contacto, solo uno
+// consigue la reserva CREANDO y el otro espera y reutiliza la conversación.
+
+/** Una reserva CREANDO más vieja que esto quedó huérfana (proceso caído). */
+const RESERVA_VENCIDA_MS = 2 * 60 * 1000;
+/** Cuánto espera un lote a que otro broadcast termine de crear la conversación. */
+const ESPERA_RESERVA_MS = 15_000;
+/** Conversaciones de venta activa a revisar por par (más recientes primero). */
+const CANDIDATOS_VENTA_ACTIVA = 5;
+
+interface RegistroConversacion {
+  id: number;
+  conversation_id: string | null;
+  estado: "CREANDO" | "ACTIVA" | "CERRADA";
+  updated_at: string;
+}
+
+type Resolucion =
+  | { tipo: "reutilizar"; conversation: ConversationInfo }
+  | { tipo: "crear"; registroId: number }
+  | { tipo: "error"; error: string };
+
+function tabla(nombre: string) {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return db().from(nombre as any);
+}
+
+async function registroActivo(telefono: string, sender: string): Promise<RegistroConversacion | null> {
+  const { data, error } = await tabla("broadcast_conversacion")
+    .select("id, conversation_id, estado, updated_at")
+    .eq("telefono", telefono)
+    .eq("sender", sender)
+    .neq("estado", "CERRADA")
+    .limit(1);
+  if (error) throw new Error(error.message);
+  return ((data ?? [])[0] as unknown as RegistroConversacion) ?? null;
+}
+
+async function marcarCerrada(registroId: number) {
+  const ahora = new Date().toISOString();
+  await tabla("broadcast_conversacion")
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    .from("conversation_lead_relation" as any)
+    .update({ estado: "CERRADA", cerrada_at: ahora, updated_at: ahora } as any)
+    .eq("id", registroId)
+    .neq("estado", "CERRADA");
+}
+
+/** Inserta un registro; `conflicto` = otro proceso ganó la carrera (índice único). */
+async function insertarRegistro(
+  row: Record<string, unknown>,
+): Promise<{ ok: true; id: number } | { ok: false; conflicto: boolean; error: string }> {
+  const { data, error } = await tabla("broadcast_conversacion")
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    .insert(row as any)
+    .select("id")
+    .single();
+  if (error) {
+    const conflicto = error.code === "23505" || error.message.includes("duplicate key");
+    return { ok: false, conflicto, error: error.message };
+  }
+  return { ok: true, id: (data as unknown as { id: number }).id };
+}
+
+/** Últimas conversaciones de venta activa del par, sin las ya marcadas CERRADA. */
+async function candidatosVentaActiva(telefono: string, sender: string): Promise<string[]> {
+  const { data, error } = await tabla("conversation_lead_relation")
     .select("infobip_conversation_id")
     .eq("telefono_contacto", telefono)
     .eq("sender", sender)
     .order("updated_at", { ascending: false })
-    .limit(1);
-  const row = (data ?? [])[0] as unknown as { infobip_conversation_id: string } | undefined;
-  return row?.infobip_conversation_id ?? null;
+    .limit(CANDIDATOS_VENTA_ACTIVA);
+  if (error) throw new Error(error.message);
+  const ids = [
+    ...new Set(
+      ((data ?? []) as unknown as { infobip_conversation_id: string | null }[])
+        .map((r) => r.infobip_conversation_id)
+        .filter((id): id is string => !!id),
+    ),
+  ];
+  if (ids.length === 0) return [];
+  const { data: cerradas } = await tabla("broadcast_conversacion")
+    .select("conversation_id")
+    .in("conversation_id", ids)
+    .eq("estado", "CERRADA");
+  const yaCerradas = new Set(((cerradas ?? []) as unknown as { conversation_id: string }[]).map((r) => r.conversation_id));
+  return ids.filter((id) => !yaCerradas.has(id));
+}
+
+/**
+ * Decide qué conversación usar para (teléfono, número Infobip):
+ * 1. Si hay un registro ACTIVA, se verifica en vivo en Infobip: abierta →
+ *    se reutiliza; cerrada → se marca CERRADA y no se vuelve a consultar.
+ * 2. Si hay una reserva CREANDO de otro broadcast, se espera a que termine.
+ * 3. Si no hay registro, se revisan las de venta activa (conversation_lead_relation):
+ *    la primera abierta se reutiliza; las cerradas quedan marcadas CERRADA.
+ * 4. Si no hay ninguna abierta, se toma la reserva CREANDO para crear una nueva.
+ */
+async function resolverConversacion(telefono: string, b: BroadcastRow): Promise<Resolucion> {
+  const inicio = Date.now();
+  const ahora = () => new Date().toISOString();
+
+  for (let intento = 0; intento < 12; intento++) {
+    const reg = await registroActivo(telefono, b.sender);
+
+    if (reg?.estado === "CREANDO") {
+      if (Date.now() - new Date(reg.updated_at).getTime() > RESERVA_VENCIDA_MS) {
+        await marcarCerrada(reg.id);
+        continue;
+      }
+      if (Date.now() - inicio > ESPERA_RESERVA_MS) {
+        return {
+          tipo: "error",
+          error: "Otro broadcast está creando la conversación de este contacto en este momento. Reintenta en unos minutos.",
+        };
+      }
+      await sleep(2000);
+      continue;
+    }
+
+    if (reg?.estado === "ACTIVA" && reg.conversation_id) {
+      const r = await getConversation(reg.conversation_id);
+      if (r.ok && r.data && ESTADOS_REUTILIZABLES.has(r.data.status)) {
+        return { tipo: "reutilizar", conversation: r.data };
+      }
+      if ((r.ok && r.data) || r.status === 404) {
+        // CLOSED, o ya no existe en Infobip: no volver a consultarla.
+        await marcarCerrada(reg.id);
+        continue;
+      }
+      return { tipo: "error", error: `No se pudo verificar en Infobip la conversación existente: ${r.error}` };
+    }
+
+    // Sin registro propio: revisar conversaciones de venta activa.
+    let abierta: ConversationInfo | null = null;
+    for (const id of await candidatosVentaActiva(telefono, b.sender)) {
+      const r = await getConversation(id);
+      if (r.ok && r.data && ESTADOS_REUTILIZABLES.has(r.data.status)) {
+        abierta = r.data;
+        break;
+      }
+      if ((r.ok && r.data) || r.status === 404) {
+        await insertarRegistro({
+          telefono,
+          sender: b.sender,
+          conversation_id: id,
+          estado: "CERRADA",
+          origen: "VENTA_ACTIVA",
+          cerrada_at: ahora(),
+        });
+        continue;
+      }
+      return { tipo: "error", error: `No se pudo verificar en Infobip una conversación previa: ${r.error}` };
+    }
+
+    if (abierta) {
+      const ins = await insertarRegistro({
+        telefono,
+        sender: b.sender,
+        conversation_id: abierta.id,
+        estado: "ACTIVA",
+        origen: "VENTA_ACTIVA",
+        queue_id: abierta.queueId,
+        broadcast_id: b.id,
+      });
+      if (ins.ok) return { tipo: "reutilizar", conversation: abierta };
+      if (ins.conflicto) continue; // otro proceso registró el par mientras tanto
+      return { tipo: "error", error: `No se pudo registrar la conversación: ${ins.error}` };
+    }
+
+    const reserva = await insertarRegistro({
+      telefono,
+      sender: b.sender,
+      estado: "CREANDO",
+      origen: "BROADCAST",
+      queue_id: b.queue_id,
+      broadcast_id: b.id,
+    });
+    if (reserva.ok) return { tipo: "crear", registroId: reserva.id };
+    if (reserva.conflicto) continue;
+    return { tipo: "error", error: `No se pudo reservar la conversación: ${reserva.error}` };
+  }
+  return { tipo: "error", error: "No se pudo resolver la conversación del contacto (demasiados reintentos)." };
 }
 
 async function procesarDestinatario(b: BroadcastRow, d: DestinatarioRow): Promise<DestinatarioRow> {
@@ -293,49 +468,54 @@ async function procesarDestinatario(b: BroadcastRow, d: DestinatarioRow): Promis
     ...extra,
   });
 
-  // 1. Reutilizar la conversación abierta con esta línea, o crear una nueva.
-  let conversationId: string | null = null;
-  let reutilizada = false;
-  try {
-    const previaId = await buscarConversacionPrevia(d.telefono, b.sender);
-    const previa = previaId ? await getConversation(previaId) : null;
-    if (previa && ESTADOS_REUTILIZABLES.has(previa.status)) {
-      conversationId = previa.id;
-      reutilizada = true;
-      if (previa.queueId !== b.queue_id) {
-        const r = await moveConversationQueue(previa.id, b.queue_id);
-        if (!r.ok) {
-          return fin("ERROR", {
-            conversation_id: previa.id,
-            conversacion_reutilizada: true,
-            error: `No se pudo mover la conversación a la cola: ${r.error}`,
-          });
-        }
+  // 1. Reutilizar la conversación abierta con este número Infobip, o crear una nueva.
+  const res = await resolverConversacion(d.telefono, b);
+  if (res.tipo === "error") return fin("ERROR", { error: res.error });
+
+  let conversationId: string;
+  const reutilizada = res.tipo === "reutilizar";
+
+  if (res.tipo === "reutilizar") {
+    conversationId = res.conversation.id;
+    if (res.conversation.queueId !== b.queue_id) {
+      const r = await moveConversationQueue(conversationId, b.queue_id);
+      if (!r.ok) {
+        return fin("ERROR", {
+          conversation_id: conversationId,
+          conversacion_reutilizada: true,
+          error: `No se pudo mover la conversación a la cola: ${r.error}`,
+        });
       }
     }
-  } catch (e) {
-    advertencias.push(`No se pudo revisar conversaciones previas: ${(e as Error).message}`);
-  }
-
-  if (!conversationId) {
+    if (b.agent_id && res.conversation.agentId !== b.agent_id) {
+      const r = await assignConversation(conversationId, b.agent_id);
+      if (!r.ok) {
+        return fin("ERROR", {
+          conversation_id: conversationId,
+          conversacion_reutilizada: true,
+          error: `No se pudo asignar al asesor: ${r.error}`,
+        });
+      }
+    }
+  } else {
     const r = await createConversation({
       queueId: b.queue_id,
       agentId: b.agent_id,
       topic: `Broadcast ${b.campana} · ${d.telefono}`,
     });
     if (!r.ok || !r.data?.id) {
+      // Liberar la reserva para que un reintento pueda volver a intentarlo.
+      await tabla("broadcast_conversacion").delete().eq("id", res.registroId).eq("estado", "CREANDO");
       return fin("ERROR", { error: `No se pudo crear la conversación: ${r.error || "sin id"}` });
     }
     conversationId = r.data.id;
-  } else if (b.agent_id) {
-    const r = await assignConversation(conversationId, b.agent_id);
-    if (!r.ok) {
-      return fin("ERROR", {
-        conversation_id: conversationId,
-        conversacion_reutilizada: true,
-        error: `No se pudo asignar al asesor: ${r.error}`,
-      });
-    }
+    // Desde aquí la conversación existe: si la plantilla falla, un reintento
+    // la reutiliza en vez de crear otra.
+    const { error } = await tabla("broadcast_conversacion")
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      .update({ conversation_id: conversationId, estado: "ACTIVA", updated_at: new Date().toISOString() } as any)
+      .eq("id", res.registroId);
+    if (error) advertencias.push(`No se registró la conversación creada: ${error.message}`);
   }
 
   // 2. Plantilla. Si falla, el mensaje no salió: ERROR (se puede reintentar).
@@ -360,23 +540,6 @@ async function procesarDestinatario(b: BroadcastRow, d: DestinatarioRow): Promis
   for (const tag of [TAG_BROADCAST, b.campana]) {
     const r = await addTag(conversationId, tag);
     if (!r.ok) advertencias.push(`Etiqueta "${tag}": ${r.error}`);
-  }
-
-  if (!reutilizada) {
-    const { error } = await db()
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      .from("conversation_lead_relation" as any)
-      .upsert(
-        {
-          infobip_conversation_id: conversationId,
-          telefono_contacto: d.telefono,
-          sender: b.sender,
-          updated_at: new Date().toISOString(),
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        } as any,
-        { onConflict: "infobip_conversation_id" },
-      );
-    if (error) advertencias.push(`No se registró en conversation_lead_relation: ${error.message}`);
   }
 
   return fin("OK", {

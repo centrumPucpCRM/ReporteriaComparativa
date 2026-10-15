@@ -26,7 +26,7 @@ function config() {
   return { host, apiKey };
 }
 
-interface InfobipResponse<T> {
+export interface InfobipResponse<T> {
   ok: boolean;
   status: number;
   data: T | null;
@@ -223,9 +223,13 @@ export interface ConversationInfo {
   agentId: string | null;
 }
 
-export async function getConversation(id: string): Promise<ConversationInfo | null> {
-  const r = await request<ConversationInfo>("GET", `/ccaas/1/conversations/${encodeURIComponent(id)}`);
-  return r.ok ? r.data : null;
+/**
+ * Devuelve la respuesta completa (no solo los datos) para que el llamador
+ * distinga "no existe" (404) de "no se pudo consultar" (red, 5xx): en el
+ * segundo caso no hay que asumir nada, o se crearían conversaciones duplicadas.
+ */
+export async function getConversation(id: string): Promise<InfobipResponse<ConversationInfo>> {
+  return request<ConversationInfo>("GET", `/ccaas/1/conversations/${encodeURIComponent(id)}`);
 }
 
 export async function createConversation(input: {
