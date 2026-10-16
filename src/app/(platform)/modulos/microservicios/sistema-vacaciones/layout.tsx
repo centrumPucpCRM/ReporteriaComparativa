@@ -18,7 +18,7 @@ export default function SistemaVacacionesLayout({ children }: { children: ReactN
     <ModuleShell
       info={{
         title: "Sistema de Vacaciones",
-        subtitle: "Gestión de descansos",
+        subtitle: "Vendedores en Oracle CRM",
         icon: ICON_VACACIONES,
         iconBg: "bg-emerald-50 text-emerald-600",
       }}
@@ -28,7 +28,7 @@ export default function SistemaVacacionesLayout({ children }: { children: ReactN
           label: "PRINCIPAL",
           views: [
             {
-              label: "Inicio",
+              label: "Vendedores",
               href: "/modulos/microservicios/sistema-vacaciones",
               icon: ICON_INICIO,
             },

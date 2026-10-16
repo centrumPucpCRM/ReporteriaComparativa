@@ -17,8 +17,8 @@ const SUBMODULOS = [
   {
     slug: "sistema-vacaciones",
     titulo: "Sistema de Vacaciones",
-    subtitulo: "Gestión de descansos",
-    descripcion: "Solicitudes, aprobaciones y saldo de vacaciones del equipo.",
+    subtitulo: "Vendedores en Oracle CRM",
+    descripcion: "Marcar o desmarcar vendedores en vacaciones en Oracle CRM.",
     iconColor: "bg-emerald-50 text-emerald-600",
     icon: (
       <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">

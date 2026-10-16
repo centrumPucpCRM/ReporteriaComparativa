@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Centrum PUCP CRM platform, organized as a hub of modules. Two areas exist today:
 - **Reportería Comparativa** — compares program metrics (leads, conversions, enrollments) between 2025 and 2026 cohorts, aligned relative to inauguration dates.
-- **Microservicios** — internal operational tools. `infobip-ext` is the first real one: CRUD admin tables over a custom Supabase schema plus a token-authenticated REST API consumed by external Infobip flows. `eloqua-webhooks` recibe webhooks outbound de Eloqua (hoy: exportar contactos a Google Sheets). `sistema-vacaciones` is still a placeholder.
+- **Microservicios** — internal operational tools. `infobip-ext` is the first real one: CRUD admin tables over a custom Supabase schema plus a token-authenticated REST API consumed by external Infobip flows. `eloqua-webhooks` recibe webhooks outbound de Eloqua (hoy: exportar contactos a Google Sheets). `sistema-vacaciones` marca/desmarca vendedores en vacaciones directo en Oracle CRM.
 
 Built in Spanish for Spanish-speaking users — keep UI strings, comments, and commit messages in Spanish to match.
 
@@ -48,7 +48,7 @@ src/
     │       └── microservicios/  # ModuleShell sidebar modules
     │           ├── infobip-ext/      # CRUD tables driven by data-table lib
     │           ├── eloqua-webhooks/  # instrucciones + prueba del webhook Eloqua → Google Sheets
-    │           └── sistema-vacaciones/  # placeholder
+    │           └── sistema-vacaciones/  # vendedores en vacaciones (Oracle CRM)
     └── page.tsx     # redirects to /modulos
 ```
 
@@ -67,7 +67,7 @@ src/
 - `/modulos/microservicios` → selector de microservicios (cards)
 - `/modulos/microservicios/infobip-ext` → home + sub-tablas (`conversation-lead-relation`, `sender-last-rdv`, `colas`) + `broadcast` (envío masivo, ver "Broadcast")
 - `/modulos/microservicios/eloqua-webhooks` → instrucciones de configuración + formulario de prueba
-- `/modulos/microservicios/sistema-vacaciones` → placeholder
+- `/modulos/microservicios/sistema-vacaciones` → listado de vendedores activos y botón iniciar/finalizar vacaciones
 - `/api/infobip-ext/*` → REST API (see "REST API layer" below); not behind session auth
 
 **Two layout conventions coexist** — match the one already in the branch of the tree you're editing:
@@ -154,12 +154,20 @@ The per-table `actions.ts` must be a `"use server"` module that re-exports thin 
 
 ## Eloqua Webhooks → Google Sheets
 
-`POST /api/eloqua-webhooks/google-sheets` ([route.ts](src/app/api/eloqua-webhooks/google-sheets/route.ts)) recibe el webhook outbound de Eloqua (objeto Contact) y agrega una fila al Google Sheet que indican los UTM del contacto: `utm_excel` (UTM Campaign Name) = ID o URL del documento, `utm_hoja` (UTM Campaign Medium) = pestaña (vacío → primera pestaña). Columnas (A:E, mismo orden que la pestaña "Eloqua" del sheet de reportería): `dni`, `correo`, `PartyNumber`, `OptyNumber`, `fecha_creacion` (hora Lima); los encabezados se escriben solos si la fila 1 está vacía. El append se limita a A:E con `insertDataOption=OVERWRITE` (no inserta filas), porque esa pestaña tiene fórmulas en F por fila que deben quedar alineadas. Los ids puramente numéricos se escriben como número para que los cruces con CRM sigan funcionando.
+`POST /api/eloqua-webhooks/google-sheets` ([route.ts](src/app/api/eloqua-webhooks/google-sheets/route.ts)) recibe el webhook outbound de Eloqua (objeto Contact) y agrega una fila al Google Sheet que indican los UTM del contacto. **Obligatorios**: `utm_excel` (UTM Campaign Name) = ID o URL del documento, `utm_hoja` (UTM Campaign Medium) = pestaña; si falta alguno → 400. Todos los demás campos del body son libres: se escriben como columnas desde la A **en el orden en que llegan** (`Object.entries` respeta el orden del JSON), más `fecha_creacion` (hora Lima) al final si el body no la trae. Si la fila 1 está vacía se escriben los nombres de los campos como encabezados; si no, se escribe por posición (no se mapea por nombre de encabezado). No usa `values:append`: su detección de tabla incluye columnas vecinas y en la pestaña "Eloqua" del sheet de reportería (fórmulas pre-cargadas en F2:F307) escribía después de la última fórmula. [agregarFila](src/lib/google-sheets.ts) calcula la fila libre solo en A:<última columna>, escribe con `values.update`, relee la fila y reintenta si otra escritura simultánea la pisó (dentro de un proceso las escrituras se encolan por documento+pestaña). Los valores puramente numéricos se escriben como número para que los cruces con CRM sigan funcionando.
 
 - Auth: `checkApiKey(req, "ELOQUA_WEBHOOKS_API_KEY")` — en Eloqua va como header `Authorization: Bearer <key>` (sección Headers).
 - Lógica compartida con la UI en [src/lib/eloqua-webhooks.ts](src/lib/eloqua-webhooks.ts); el formulario de prueba del módulo llama la misma función vía server action.
 - [src/lib/google-sheets.ts](src/lib/google-sheets.ts) habla con la Sheets API v4 firmando el JWT del service account con `node:crypto` (sin `googleapis`); token cacheado en memoria. Escribe con `valueInputOption=RAW` (un texto que empiece con "=" no se evalúa como fórmula).
 - Cada Google Sheet debe compartirse (edición) con el `client_email` del service account; si no, la API responde 403 con ese mensaje.
+
+## Sistema de Vacaciones
+
+Migrado desde una página estática en S3 + dos Lambdas públicas (listar y PATCH). Ahora todo pasa por server actions con `requireUser()` ([actions.ts](src/app/(platform)/modulos/microservicios/sistema-vacaciones/actions.ts)) que llaman a [src/lib/oracle-crm.ts](src/lib/oracle-crm.ts) (server-only, Basic auth desde env):
+
+- **Listar**: `GET resourceUsers` con `UserStatus="A";IndividualRoleCode="SALES_REPRESENTATIVE"`, paginando por `hasMore`.
+- **Cambiar**: `PATCH resourceUsers/{ResourcePartyNumber}` con `{ CTREnVacaciones_c: boolean }` (igual que la Lambda original, que usaba el party number como id). Cada cambio deja una línea en los logs del servidor con el email del usuario.
+- La UI pide confirmación antes del PATCH y actualiza la fila con lo que devuelve Oracle (no recarga todo). La búsqueda tolera tildes y errores de tipeo (Levenshtein ≥ 70% desde 3 letras), como la página original.
 
 ## Environment
 
@@ -176,6 +184,9 @@ GOOGLE_CLIENT_EMAIL=<client_email>             # eloqua-webhooks: service accoun
 GOOGLE_PRIVATE_KEY="<private_key>"            # eloqua-webhooks: con 
  literales o saltos reales
 ELOQUA_WEBHOOKS_API_KEY=<bearer token>         # gate para /api/eloqua-webhooks/*
+ORACLE_CRM_USER=<usuario>                      # sistema-vacaciones: Basic auth REST de Oracle CRM
+ORACLE_CRM_PASSWORD=<password>                 # sistema-vacaciones
+ORACLE_CRM_URL=<https://xxxx.oraclecloud.com>   # sistema-vacaciones: host de la instancia, sin path
 ```
 
 `admin.ts` reads env via `readEnvValue()`, which strips a stray `NAME=` prefix and surrounding quotes — so a value accidentally pasted as `SUPABASE_SERVICE_ROLE_KEY=eyJ...` still works.
