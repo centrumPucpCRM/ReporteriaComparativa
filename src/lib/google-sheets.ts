@@ -25,8 +25,11 @@ export class GoogleSheetsError extends Error {
   }
 }
 
+// Tolera errores típicos al pegar en Vercel: prefijo `NOMBRE=` y comillas alrededor.
 function leerEnv(name: string): string {
-  return (process.env[name] || "").trim().replace(/^['"]|['"]$/g, "");
+  const raw = (process.env[name] || "").trim();
+  const valor = raw.startsWith(`${name}=`) ? raw.slice(name.length + 1).trim() : raw;
+  return valor.replace(/^['"]|['"],?$/g, "").trim();
 }
 
 function leerServiceAccount(): ServiceAccount {
@@ -73,10 +76,13 @@ async function accessToken(): Promise<string> {
   });
   const data = (await res.json().catch(() => ({}))) as { access_token?: string; expires_in?: number; error_description?: string };
   if (!res.ok || !data.access_token) {
-    throw new GoogleSheetsError(
-      `No se pudo autenticar el service account en Google: ${data.error_description || res.status}`,
-      502,
-    );
+    const detalle = data.error_description || `HTTP ${res.status}`;
+    const pista = /account not found/i.test(detalle)
+      ? ` GOOGLE_CLIENT_EMAIL ("${sa.client_email}") no corresponde a ningún service account: revisar el valor.`
+      : /signature/i.test(detalle)
+        ? " GOOGLE_PRIVATE_KEY no corresponde a GOOGLE_CLIENT_EMAIL: revisar que esté completa."
+        : "";
+    throw new GoogleSheetsError(`No se pudo autenticar el service account en Google: ${detalle}.${pista}`, 502);
   }
   tokenCache = { token: data.access_token, expiresAt: Date.now() + (data.expires_in ?? 3600) * 1000 };
   return data.access_token;
@@ -90,13 +96,20 @@ export function extraerSpreadsheetId(valor: string): string {
 }
 
 /** Rango A1 con el nombre de la hoja escapado (comillas simples, `'` → `''`). */
-function rango(hoja: string | null, celdas: string): string {
-  return hoja ? `'${hoja.replace(/'/g, "''")}'!${celdas}` : celdas;
+function rango(hoja: string, celdas: string): string {
+  return `'${hoja.replace(/'/g, "''")}'!${celdas}`;
+}
+
+/** Letra de columna A1: 1 → "A", 26 → "Z", 27 → "AA". */
+function letraColumna(n: number): string {
+  let letra = "";
+  for (; n > 0; n = Math.floor((n - 1) / 26)) letra = String.fromCharCode(65 + ((n - 1) % 26)) + letra;
+  return letra;
 }
 
 async function sheetsFetch(
   spreadsheetId: string,
-  hoja: string | null,
+  hoja: string,
   path: string,
   init?: RequestInit,
 ): Promise<unknown> {
@@ -125,40 +138,82 @@ async function sheetsFetch(
   throw new GoogleSheetsError(`Error de Google Sheets: ${detalle}`, res.status >= 500 ? 502 : res.status);
 }
 
+type Celda = string | number;
+
+// Escrituras en curso por documento+pestaña: dentro de un mismo proceso se encolan para
+// que dos webhooks simultáneos no calculen la misma "primera fila libre".
+const escrituras = new Map<string, Promise<unknown>>();
+
+async function enCola<T>(clave: string, fn: () => Promise<T>): Promise<T> {
+  const actual = (escrituras.get(clave) ?? Promise.resolve()).catch(() => undefined).then(fn);
+  escrituras.set(clave, actual);
+  try {
+    return await actual;
+  } finally {
+    if (escrituras.get(clave) === actual) escrituras.delete(clave);
+  }
+}
+
+function mismaFila(a: unknown[] | undefined, b: Celda[]): boolean {
+  const norm = (f: unknown[]) => {
+    const t = f.map((v) => String(v ?? ""));
+    while (t.length && t[t.length - 1] === "") t.pop();
+    return JSON.stringify(t);
+  };
+  return norm(a ?? []) === norm(b);
+}
+
 /**
- * Agrega `fila` en la primera fila libre de las columnas que ocupan los `encabezados`
- * (A:E si son 5). Si la hoja está vacía, escribe antes los `encabezados`.
- * `hoja` null → primera pestaña del documento.
+ * Escribe `fila` debajo de la última fila con datos en las columnas que ocupa (A:E si son
+ * 5 valores). Si esas columnas están vacías, escribe antes los `encabezados` en la fila 1.
  *
- * - El rango del append se limita a esas columnas e `insertDataOption=OVERWRITE`: se
- *   escribe sobre filas vacías existentes sin insertar filas, así las fórmulas que la hoja
- *   tenga a la derecha (p. ej. columna F) siguen alineadas con su fila.
+ * - No usa `values:append`: su detección de "tabla" incluye columnas vecinas, y en una
+ *   pestaña con fórmulas pre-cargadas a la derecha (p. ej. F2:F307) escribía después de la
+ *   última fórmula. Aquí la fila libre se calcula solo con A:<última columna> y se escribe
+ *   sobre ella, así las fórmulas de la derecha quedan alineadas con su fila.
+ * - Tras escribir se relee la fila: si otra escritura simultánea (otra instancia) la pisó,
+ *   se reintenta en la siguiente fila libre.
  * - valueInputOption=RAW: los textos se guardan tal cual (un "=" no se evalúa como
  *   fórmula). Para que un valor quede como número hay que mandarlo como number.
  */
 export async function agregarFila(params: {
   spreadsheetId: string;
-  hoja: string | null;
+  hoja: string;
   encabezados: string[];
-  fila: (string | number)[];
-}): Promise<{ rangoActualizado: string | null; conEncabezados: boolean }> {
+  fila: Celda[];
+}): Promise<{ rangoActualizado: string; conEncabezados: boolean }> {
   const { spreadsheetId, hoja, encabezados, fila } = params;
+  const ultima = letraColumna(Math.max(fila.length, encabezados.length, 1));
+  const leer = async (celdas: string) =>
+    (
+      (await sheetsFetch(
+        spreadsheetId,
+        hoja,
+        `/values/${encodeURIComponent(rango(hoja, celdas))}?valueRenderOption=UNFORMATTED_VALUE`,
+      )) as { values?: unknown[][] }
+    ).values ?? [];
 
-  const primera = (await sheetsFetch(
-    spreadsheetId,
-    hoja,
-    `/values/${encodeURIComponent(rango(hoja, "1:1"))}`,
-  )) as { values?: string[][] };
-  const conEncabezados = !primera.values?.length;
+  return enCola(`${spreadsheetId}|${hoja}`, async () => {
+    for (let intento = 0; intento < 3; intento++) {
+      const ocupadas = (await leer(`A:${ultima}`)).length;
+      const conEncabezados = ocupadas === 0;
+      const destino = conEncabezados ? 2 : ocupadas + 1;
+      const inicio = conEncabezados ? 1 : destino;
 
-  const ultimaColumna = String.fromCharCode(64 + encabezados.length); // 5 → "E" (hasta 26 columnas)
-  const query = new URLSearchParams({ valueInputOption: "RAW", insertDataOption: "OVERWRITE" });
-  const res = (await sheetsFetch(
-    spreadsheetId,
-    hoja,
-    `/values/${encodeURIComponent(rango(hoja, `A:${ultimaColumna}`))}:append?${query}`,
-    { method: "POST", body: JSON.stringify({ values: conEncabezados ? [encabezados, fila] : [fila] }) },
-  )) as { updates?: { updatedRange?: string } };
+      await sheetsFetch(
+        spreadsheetId,
+        hoja,
+        `/values/${encodeURIComponent(rango(hoja, `A${inicio}:${ultima}${destino}`))}?valueInputOption=RAW`,
+        { method: "PUT", body: JSON.stringify({ values: conEncabezados ? [encabezados, fila] : [fila] }) },
+      );
 
-  return { rangoActualizado: res.updates?.updatedRange ?? null, conEncabezados };
+      if (mismaFila((await leer(`A${destino}:${ultima}${destino}`))[0], fila)) {
+        return { rangoActualizado: `${hoja}!A${destino}:${ultima}${destino}`, conEncabezados };
+      }
+    }
+    throw new GoogleSheetsError(
+      "No se pudo escribir la fila: otras escrituras simultáneas ocuparon la fila libre. Reintentar.",
+      409,
+    );
+  });
 }

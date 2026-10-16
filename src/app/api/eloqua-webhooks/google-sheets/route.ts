@@ -1,20 +1,21 @@
 import { NextRequest, NextResponse } from "next/server";
 import { checkApiKey } from "@/lib/api-auth";
-import { exportarContactoASheet, type ContactoEloqua } from "@/lib/eloqua-webhooks";
+import { exportarContactoASheet, type BodyEloqua } from "@/lib/eloqua-webhooks";
 
 /**
  * POST /api/eloqua-webhooks/google-sheets
  *
  * Webhook outbound de Eloqua (objeto Contact). Agrega una fila al Google Sheet que
- * indican los UTM del contacto:
+ * indican los UTM del contacto. Obligatorios:
  *  - utm_excel → ID del Google Sheet (UTM Campaign Name)
- *  - utm_hoja  → nombre de la pestaña (UTM Campaign Medium); vacío = primera pestaña
+ *  - utm_hoja  → nombre de la pestaña (UTM Campaign Medium)
  *
- * Body:
+ * El resto de campos del body es libre: cada uno se escribe como columna en el orden
+ * en que llega, más `fecha_creacion` al final. Ej.:
  *  { "dni", "correo", "PartyNumber", "OptyNumber", "utm_excel", "utm_hoja" }
  *
- * El Google Sheet debe estar compartido (edición) con el service account de
- * GOOGLE_CLIENT_EMAIL (credenciales: GOOGLE_CLIENT_EMAIL + GOOGLE_PRIVATE_KEY).
+ * El Google Sheet debe estar compartido (edición) con GOOGLE_CLIENT_EMAIL
+ * (credenciales: GOOGLE_CLIENT_EMAIL + GOOGLE_PRIVATE_KEY).
  */
 
 export async function POST(req: NextRequest) {
@@ -22,9 +23,9 @@ export async function POST(req: NextRequest) {
     const auth = checkApiKey(req, "ELOQUA_WEBHOOKS_API_KEY");
     if (!auth.ok) return NextResponse.json({ error: auth.error }, { status: auth.status });
 
-    let body: ContactoEloqua;
+    let body: BodyEloqua;
     try {
-      body = (await req.json()) as ContactoEloqua;
+      body = (await req.json()) as BodyEloqua;
     } catch {
       return NextResponse.json({ error: "Body JSON inválido." }, { status: 400 });
     }

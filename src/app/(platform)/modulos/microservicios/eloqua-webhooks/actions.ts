@@ -1,10 +1,10 @@
 "use server";
 
 import { requireUser } from "@/components/data-table/createTableActions";
-import { exportarContactoASheet, type ContactoEloqua, type ResultadoExport } from "@/lib/eloqua-webhooks";
+import { exportarContactoASheet, type BodyEloqua, type ResultadoExport } from "@/lib/eloqua-webhooks";
 
 /** Ejecuta la misma lógica del webhook desde la UI, para validar un Google Sheet sin pasar por Eloqua. */
-export async function probarEnvio(body: ContactoEloqua): Promise<ResultadoExport> {
+export async function probarEnvio(body: BodyEloqua): Promise<ResultadoExport> {
   try {
     await requireUser();
     return await exportarContactoASheet(body);

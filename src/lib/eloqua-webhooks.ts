@@ -1,38 +1,44 @@
 import { agregarFila, extraerSpreadsheetId, GoogleSheetsError } from "@/lib/google-sheets";
 
 /**
- * Lógica del webhook de Eloqua "ReplicarInfo-GoogleSheet" (server-only).
+ * Lógica del webhook de Eloqua → Google Sheets (server-only).
  *
- * Eloqua envía un contacto con sus UTM; el destino sale de los propios UTM:
+ * Obligatorios (definen el destino, no se escriben como columna):
  *  - utm_excel (UTM Campaign Name)   → ID (o URL) del Google Sheet
- *  - utm_hoja  (UTM Campaign Medium) → nombre de la pestaña; vacío = primera pestaña
+ *  - utm_hoja  (UTM Campaign Medium) → nombre de la pestaña
+ *
+ * Todos los demás campos del body son opcionales y se escriben como columnas en el
+ * orden en que llegan, más `fecha_creacion` (hora Lima) al final. Si la hoja está
+ * vacía, la fila 1 se llena con los nombres de los campos como encabezados.
  */
 
-export type ContactoEloqua = {
-  dni?: unknown;
-  correo?: unknown;
-  PartyNumber?: unknown;
-  OptyNumber?: unknown;
-  utm_excel?: unknown;
-  utm_hoja?: unknown;
-};
+export type BodyEloqua = Record<string, unknown>;
 
-// Mismo orden que la pestaña "Eloqua" del sheet de reportería (fecha al final).
-export const ENCABEZADOS_SHEET = ["dni", "correo", "PartyNumber", "OptyNumber", "fecha_creacion"];
+export const CAMPOS_DESTINO = ["utm_excel", "utm_hoja"] as const;
+const CAMPO_FECHA = "fecha_creacion";
 
 export type ResultadoExport =
-  | { ok: true; spreadsheetId: string; hoja: string | null; rango: string | null; conEncabezados: boolean }
+  | {
+      ok: true;
+      spreadsheetId: string;
+      hoja: string;
+      columnas: string[];
+      rango: string;
+      conEncabezados: boolean;
+    }
   | { ok: false; status: number; error: string };
 
 function asText(v: unknown): string {
-  return typeof v === "string" ? v.trim() : v == null ? "" : String(v).trim();
+  if (v == null) return "";
+  if (typeof v === "object") return JSON.stringify(v);
+  return String(v).trim();
 }
 
 /**
- * Los identificadores puramente numéricos (DNI, PartyNumber, OptyNumber) se escriben como
- * número, igual que el resto de la data del sheet, para que los cruces (BUSCARV/COINCIDIR)
- * contra columnas numéricas sigan funcionando. Con cero a la izquierda o más de 15 dígitos
- * se dejan como texto para no perder precisión.
+ * Los valores puramente numéricos (DNI, PartyNumber, OptyNumber…) se escriben como número,
+ * igual que el resto de la data del sheet, para que los cruces (BUSCARV/COINCIDIR) contra
+ * columnas numéricas sigan funcionando. Con cero a la izquierda o más de 15 dígitos se
+ * dejan como texto para no perder precisión.
  */
 function celda(v: unknown): string | number {
   const t = asText(v);
@@ -44,23 +50,27 @@ function fechaLima(): string {
   return new Date().toLocaleString("sv-SE", { timeZone: "America/Lima" });
 }
 
-export async function exportarContactoASheet(body: ContactoEloqua): Promise<ResultadoExport> {
+export async function exportarContactoASheet(body: BodyEloqua): Promise<ResultadoExport> {
   const spreadsheetId = extraerSpreadsheetId(asText(body.utm_excel));
-  const hoja = asText(body.utm_hoja) || null;
+  const hoja = asText(body.utm_hoja);
 
-  if (!spreadsheetId) {
-    return {
-      ok: false,
-      status: 400,
-      error: 'Falta "utm_excel" (UTM Campaign Name del contacto) con el ID del Google Sheet.',
-    };
+  const faltan = [!spreadsheetId && '"utm_excel" (ID del Google Sheet)', !hoja && '"utm_hoja" (nombre de la pestaña)']
+    .filter(Boolean)
+    .join(" y ");
+  if (faltan) {
+    return { ok: false, status: 400, error: `Falta ${faltan}. Ambos campos son obligatorios.` };
   }
 
-  const fila = [celda(body.dni), asText(body.correo), celda(body.PartyNumber), celda(body.OptyNumber), fechaLima()];
+  // Object.entries respeta el orden en que llegaron los campos en el JSON.
+  const datos = Object.entries(body).filter(([k]) => !(CAMPOS_DESTINO as readonly string[]).includes(k));
+  if (!datos.some(([k]) => k === CAMPO_FECHA)) datos.push([CAMPO_FECHA, fechaLima()]);
+
+  const columnas = datos.map(([k]) => k);
+  const fila = datos.map(([, v]) => celda(v));
 
   try {
-    const r = await agregarFila({ spreadsheetId, hoja, encabezados: ENCABEZADOS_SHEET, fila });
-    return { ok: true, spreadsheetId, hoja, rango: r.rangoActualizado, conEncabezados: r.conEncabezados };
+    const r = await agregarFila({ spreadsheetId, hoja, encabezados: columnas, fila });
+    return { ok: true, spreadsheetId, hoja, columnas, rango: r.rangoActualizado, conEncabezados: r.conEncabezados };
   } catch (e) {
     if (e instanceof GoogleSheetsError) return { ok: false, status: e.status, error: e.message };
     throw e;

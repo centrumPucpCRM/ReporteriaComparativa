@@ -1,6 +1,5 @@
 import { headers } from "next/headers";
 import { serviceAccountEmail } from "@/lib/google-sheets";
-import { ENCABEZADOS_SHEET } from "@/lib/eloqua-webhooks";
 import ProbarForm from "./ProbarForm";
 
 const BODY_ELOQUA = `{
@@ -37,15 +36,16 @@ export default async function EloquaWebhooksPage() {
         </p>
       </div>
 
-      <Bloque titulo="1. Configurar los UTM del contacto">
+      <Bloque titulo="1. Configurar los UTM del contacto (obligatorios)">
         <ul className="list-disc pl-5 space-y-1">
           <li>
             <b>UTM Campaign Name</b> (<code>utm_excel</code>): ID del Google Sheet (también se acepta la URL completa).
           </li>
           <li>
-            <b>UTM Campaign Medium</b> (<code>utm_hoja</code>): nombre de la pestaña. Si va vacío se usa la primera pestaña.
+            <b>UTM Campaign Medium</b> (<code>utm_hoja</code>): nombre exacto de la pestaña donde se escribirá.
           </li>
         </ul>
+        <p>Si alguno de los dos llega vacío, el webhook responde error 400 y no escribe nada.</p>
         <p>
           El Google Sheet debe estar compartido con permisos de <b>edición</b> con:{" "}
           {email ? (
@@ -78,10 +78,21 @@ export default async function EloquaWebhooksPage() {
             <pre className="mt-1 p-3 rounded-lg bg-gray-900 text-gray-100 text-xs overflow-x-auto">{BODY_ELOQUA}</pre>
           </dd>
         </dl>
-        <p>
-          Columnas que se escriben (los encabezados se agregan solos si la hoja está vacía):{" "}
-          <b>{ENCABEZADOS_SHEET.join(" · ")}</b>.
-        </p>
+        <ul className="list-disc pl-5 space-y-1">
+          <li>
+            <code>utm_excel</code> y <code>utm_hoja</code> son <b>obligatorios</b>: indican dónde escribir y no se
+            guardan como columna.
+          </li>
+          <li>
+            Todos los demás campos son <b>opcionales y libres</b>: cada uno se escribe como una columna, desde la A,{" "}
+            <b>en el mismo orden en que aparecen en el body</b>. Al final se agrega <code>fecha_creacion</code> (hora de
+            Lima).
+          </li>
+          <li>
+            Si la pestaña está vacía, la fila 1 se llena con los nombres de los campos como encabezados. Si ya tiene
+            datos, se escribe por posición: el body debe mantener el mismo orden que las columnas de la hoja.
+          </li>
+        </ul>
       </Bloque>
 
       <Bloque titulo="3. Probar un Google Sheet">
