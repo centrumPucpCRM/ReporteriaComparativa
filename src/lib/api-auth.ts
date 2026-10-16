@@ -1,12 +1,12 @@
 type AuthResult = { ok: true } | { ok: false; status: number; error: string };
 
-export function checkApiKey(req: Request): AuthResult {
-  const expected = (process.env.INFOBIP_EXT_API_KEY || "").trim();
+export function checkApiKey(req: Request, envName = "INFOBIP_EXT_API_KEY"): AuthResult {
+  const expected = (process.env[envName] || "").trim();
   if (!expected) {
     return {
       ok: false,
       status: 503,
-      error: "INFOBIP_EXT_API_KEY no configurada en el servidor.",
+      error: `${envName} no configurada en el servidor.`,
     };
   }
 

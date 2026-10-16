@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Centrum PUCP CRM platform, organized as a hub of modules. Two areas exist today:
 - **Reportería Comparativa** — compares program metrics (leads, conversions, enrollments) between 2025 and 2026 cohorts, aligned relative to inauguration dates.
-- **Microservicios** — internal operational tools. `infobip-ext` is the first real one: CRUD admin tables over a custom Supabase schema plus a token-authenticated REST API consumed by external Infobip flows. `sistema-vacaciones` is still a placeholder.
+- **Microservicios** — internal operational tools. `infobip-ext` is the first real one: CRUD admin tables over a custom Supabase schema plus a token-authenticated REST API consumed by external Infobip flows. `eloqua-webhooks` recibe webhooks outbound de Eloqua (hoy: exportar contactos a Google Sheets). `sistema-vacaciones` is still a placeholder.
 
 Built in Spanish for Spanish-speaking users — keep UI strings, comments, and commit messages in Spanish to match.
 
@@ -47,6 +47,7 @@ src/
     │       ├── reporteria/      # dashboard comparativo + lib/ (standalone header)
     │       └── microservicios/  # ModuleShell sidebar modules
     │           ├── infobip-ext/      # CRUD tables driven by data-table lib
+    │           ├── eloqua-webhooks/  # instrucciones + prueba del webhook Eloqua → Google Sheets
     │           └── sistema-vacaciones/  # placeholder
     └── page.tsx     # redirects to /modulos
 ```
@@ -65,6 +66,7 @@ src/
 - `/modulos/reporteria` → dashboard comparativo (módulo principal)
 - `/modulos/microservicios` → selector de microservicios (cards)
 - `/modulos/microservicios/infobip-ext` → home + sub-tablas (`conversation-lead-relation`, `sender-last-rdv`, `colas`) + `broadcast` (envío masivo, ver "Broadcast")
+- `/modulos/microservicios/eloqua-webhooks` → instrucciones de configuración + formulario de prueba
 - `/modulos/microservicios/sistema-vacaciones` → placeholder
 - `/api/infobip-ext/*` → REST API (see "REST API layer" below); not behind session auth
 
@@ -150,6 +152,15 @@ The per-table `actions.ts` must be a `"use server"` module that re-exports thin 
 - **Entrega real**: `OK` solo significa que Infobip aceptó el mensaje. WhatsApp lo entrega o lo rechaza segundos después (p. ej. **7032 `EC_FREQUENCY_CAPPING`**: Meta bloquea por exceso de plantillas de marketing al mismo contacto). `verificarEntregas` consulta `GET /messages-api/1/logs?messageId=…` (acepta varios ids) y guarda `entrega` = `ENTREGADO` / `NO_ENTREGADO` + `entrega_detalle`. El `message_id` se toma de la respuesta del envío o, si falta, se busca en los mensajes de la conversación. La UI verifica sola al terminar y en el detalle del historial. Columnas en [sql/infobip_ext_broadcast_entrega.sql](sql/infobip_ext_broadcast_entrega.sql).
 - **Historial** (`broadcast/historial` y `historial/[id]`): lista con progreso en vivo y detalle por contacto. Cada lote recalcula `enviados`/`fallidos` y toca `updated_at`; un `EN_CURSO` sin actividad por 2 min se muestra como "Detenido" (se cerró la pestaña) y se puede **continuar** desde el detalle, que vuelve a correr los lotes de las filas `PENDIENTE`.
 
+## Eloqua Webhooks → Google Sheets
+
+`POST /api/eloqua-webhooks/google-sheets` ([route.ts](src/app/api/eloqua-webhooks/google-sheets/route.ts)) recibe el webhook outbound de Eloqua (objeto Contact) y agrega una fila al Google Sheet que indican los UTM del contacto: `utm_excel` (UTM Campaign Name) = ID o URL del documento, `utm_hoja` (UTM Campaign Medium) = pestaña (vacío → primera pestaña). Columnas (A:E, mismo orden que la pestaña "Eloqua" del sheet de reportería): `dni`, `correo`, `PartyNumber`, `OptyNumber`, `fecha_creacion` (hora Lima); los encabezados se escriben solos si la fila 1 está vacía. El append se limita a A:E con `insertDataOption=OVERWRITE` (no inserta filas), porque esa pestaña tiene fórmulas en F por fila que deben quedar alineadas. Los ids puramente numéricos se escriben como número para que los cruces con CRM sigan funcionando.
+
+- Auth: `checkApiKey(req, "ELOQUA_WEBHOOKS_API_KEY")` — en Eloqua va como header `Authorization: Bearer <key>` (sección Headers).
+- Lógica compartida con la UI en [src/lib/eloqua-webhooks.ts](src/lib/eloqua-webhooks.ts); el formulario de prueba del módulo llama la misma función vía server action.
+- [src/lib/google-sheets.ts](src/lib/google-sheets.ts) habla con la Sheets API v4 firmando el JWT del service account con `node:crypto` (sin `googleapis`); token cacheado en memoria. Escribe con `valueInputOption=RAW` (un texto que empiece con "=" no se evalúa como fórmula).
+- Cada Google Sheet debe compartirse (edición) con el `client_email` del service account; si no, la API responde 403 con ese mensaje.
+
 ## Environment
 
 Required `.env.local` at the project root (gitignored via `.env*`):
@@ -161,6 +172,10 @@ SUPABASE_SERVICE_ROLE_KEY=<service role key>   # used by admin.ts: data-table ac
 INFOBIP_EXT_API_KEY=<bearer token>             # gate for /api/infobip-ext/* (checkApiKey)
 INFOBIP_API_KEY=<infobip api key>              # broadcast: llamadas directas a Infobip (src/lib/infobip.ts)
 INFOBIP_API_HOST=<xxxx.api-us.infobip.com>     # broadcast
+GOOGLE_CLIENT_EMAIL=<client_email>             # eloqua-webhooks: service account de Google Sheets
+GOOGLE_PRIVATE_KEY="<private_key>"            # eloqua-webhooks: con 
+ literales o saltos reales
+ELOQUA_WEBHOOKS_API_KEY=<bearer token>         # gate para /api/eloqua-webhooks/*
 ```
 
 `admin.ts` reads env via `readEnvValue()`, which strips a stray `NAME=` prefix and surrounding quotes — so a value accidentally pasted as `SUPABASE_SERVICE_ROLE_KEY=eyJ...` still works.
