@@ -20,6 +20,7 @@ import {
   programarVacaciones,
   terminarVacaciones,
 } from "../actions";
+import ImportarExportar from "../_components/ImportarExportar";
 
 const DIAS = ["Lun", "Mar", "Mié", "Jue", "Vie", "Sáb", "Dom"];
 
@@ -235,15 +236,18 @@ export default function CalendarioClient() {
             Programa vacaciones con fecha: se activan y se desactivan solas en Oracle CRM.
           </p>
         </div>
-        <button
-          onClick={() => abrirNuevo(hoy)}
-          className="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-3 py-2 text-sm font-semibold text-white hover:bg-emerald-700"
-        >
-          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-          </svg>
-          Programar vacaciones
-        </button>
+        <div className="flex flex-wrap gap-2">
+          <ImportarExportar />
+          <button
+            onClick={() => abrirNuevo(hoy)}
+            className="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-3 py-2 text-sm font-semibold text-white hover:bg-emerald-700"
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+            </svg>
+            Programar vacaciones
+          </button>
+        </div>
       </div>
 
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
