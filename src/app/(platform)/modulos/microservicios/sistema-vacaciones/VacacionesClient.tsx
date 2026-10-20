@@ -1,10 +1,19 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import type { Vendedor } from "@/lib/oracle-crm";
-import { cambiarVacaciones, obtenerVendedores } from "./actions";
+import { diasEntre, formatoFecha, sumarDias, type Periodo } from "@/lib/vacaciones";
+import { cambiarVacaciones, obtenerPanelVendedores, programarVacaciones, terminarVacaciones } from "./actions";
 
 type Filtro = "todos" | "vacaciones" | "trabajando";
+
+/** "iniciar" crea un periodo con fechas; "finalizar" lo termina hoy (o desmarca a mano si no hay periodo). */
+type Modal =
+  | { tipo: "iniciar"; vendedor: Vendedor; fechaInicio: string; fechaFin: string; nota: string }
+  | { tipo: "finalizar"; vendedor: Vendedor; periodo: Periodo | null; motivo: string };
+
+const FECHA_LARGA: Intl.DateTimeFormatOptions = { weekday: "long", day: "numeric", month: "long" };
 
 function normalizar(s: string): string {
   return s.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().trim();
@@ -42,6 +51,12 @@ function coincide(nombre: string, tokens: string[]): boolean {
   );
 }
 
+function rangoTexto(p: Periodo): string {
+  return p.fechaInicio === p.fechaFin
+    ? formatoFecha(p.fechaInicio)
+    : `${formatoFecha(p.fechaInicio)} – ${formatoFecha(p.fechaFin)}`;
+}
+
 function EstadoBadge({ enVacaciones }: { enVacaciones: boolean }) {
   return enVacaciones ? (
     <span className="inline-flex items-center gap-1.5 rounded-full bg-amber-100 px-2.5 py-0.5 text-xs font-semibold text-amber-800">
@@ -56,11 +71,13 @@ function EstadoBadge({ enVacaciones }: { enVacaciones: boolean }) {
 
 export default function VacacionesClient() {
   const [vendedores, setVendedores] = useState<Vendedor[] | null>(null);
+  const [periodos, setPeriodos] = useState<Periodo[]>([]);
+  const [hoy, setHoy] = useState("");
   const [cargando, setCargando] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [busqueda, setBusqueda] = useState("");
   const [filtro, setFiltro] = useState<Filtro>("todos");
-  const [confirmar, setConfirmar] = useState<Vendedor | null>(null);
+  const [modal, setModal] = useState<Modal | null>(null);
   const [guardando, setGuardando] = useState(false);
   const [errorCambio, setErrorCambio] = useState<string | null>(null);
   const [aviso, setAviso] = useState<string | null>(null);
@@ -68,9 +85,15 @@ export default function VacacionesClient() {
   const cargar = useCallback(async () => {
     setCargando(true);
     setError(null);
-    const r = await obtenerVendedores();
-    if (r.ok) setVendedores(r.data);
-    else setError(r.error);
+    const r = await obtenerPanelVendedores();
+    if (r.ok) {
+      setVendedores(r.data.vendedores);
+      setPeriodos(r.data.periodos);
+      setHoy(r.data.hoy);
+      if (r.data.aviso) setAviso(r.data.aviso);
+    } else {
+      setError(r.error);
+    }
     setCargando(false);
   }, []);
 
@@ -78,6 +101,18 @@ export default function VacacionesClient() {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- carga inicial desde Oracle
     void cargar();
   }, [cargar]);
+
+  /** Por vendedor: el periodo en curso y el próximo programado. */
+  const periodosPorVendedor = useMemo(() => {
+    const mapa = new Map<string, { enCurso: Periodo | null; proximo: Periodo | null }>();
+    for (const p of periodos) {
+      const actual = mapa.get(p.partyNumber) ?? { enCurso: null, proximo: null };
+      if (p.estado === "EN_CURSO") actual.enCurso = p;
+      else if (p.estado === "PROGRAMADA" && (!actual.proximo || p.fechaInicio < actual.proximo.fechaInicio)) actual.proximo = p;
+      mapa.set(p.partyNumber, actual);
+    }
+    return mapa;
+  }, [periodos]);
 
   const totales = useMemo(() => {
     const lista = vendedores ?? [];
@@ -94,28 +129,47 @@ export default function VacacionesClient() {
     );
   }, [vendedores, busqueda, filtro]);
 
-  function abrirConfirmacion(v: Vendedor) {
+  function abrir(m: Modal) {
     setErrorCambio(null);
-    setConfirmar(v);
+    setModal(m);
   }
 
-  async function aplicarCambio() {
-    if (!confirmar) return;
-    setGuardando(true);
-    setErrorCambio(null);
-    const nuevoEstado = !confirmar.enVacaciones;
-    const r = await cambiarVacaciones(confirmar.partyNumber, nuevoEstado);
+  async function aplicar() {
+    if (!modal) return;
+    let r: { ok: true; data: unknown } | { ok: false; error: string };
+    let exito: string;
+    if (modal.tipo === "iniciar") {
+      if (!modal.fechaInicio || !modal.fechaFin) return setErrorCambio("Indica desde y hasta cuándo.");
+      if (modal.fechaFin < modal.fechaInicio) return setErrorCambio("La fecha de fin no puede ser anterior a la de inicio.");
+      if (modal.fechaFin < hoy) return setErrorCambio("La fecha de fin ya pasó: para registrar vacaciones pasadas usa el calendario.");
+      setGuardando(true);
+      setErrorCambio(null);
+      r = await programarVacaciones({
+        partyNumber: modal.vendedor.partyNumber,
+        fechaInicio: modal.fechaInicio,
+        fechaFin: modal.fechaFin,
+        nota: modal.nota,
+      });
+      exito =
+        modal.fechaInicio > hoy
+          ? `Vacaciones programadas para ${modal.vendedor.nombre} (${formatoFecha(modal.fechaInicio)} – ${formatoFecha(modal.fechaFin)}).`
+          : `${modal.vendedor.nombre} está de vacaciones hasta el ${formatoFecha(modal.fechaFin, FECHA_LARGA)}.`;
+    } else {
+      setGuardando(true);
+      setErrorCambio(null);
+      r = modal.periodo
+        ? await terminarVacaciones(modal.periodo.id, modal.motivo)
+        : await cambiarVacaciones(modal.vendedor.partyNumber, false);
+      exito = `${modal.vendedor.nombre} vuelve a figurar como trabajando.`;
+    }
     setGuardando(false);
     if (!r.ok) {
       setErrorCambio(r.error);
       return;
     }
-    setVendedores((lista) =>
-      (lista ?? []).map((v) => (v.partyNumber === confirmar.partyNumber ? { ...v, enVacaciones: r.data.enVacaciones } : v)),
-    );
-    setAviso(`Vacaciones ${nuevoEstado ? "iniciadas" : "finalizadas"} para ${confirmar.nombre}.`);
-    setConfirmar(null);
-    setTimeout(() => setAviso(null), 4000);
+    setModal(null);
+    setAviso(exito);
+    void cargar();
   }
 
   const FILTROS: { id: Filtro; label: string }[] = [
@@ -124,13 +178,25 @@ export default function VacacionesClient() {
     { id: "vacaciones", label: "En vacaciones" },
   ];
 
+  /** Días de vacaciones que se pierden al terminar hoy (hoy incluido); 0 si no es anticipado. */
+  const diasRestantes =
+    modal?.tipo === "finalizar" && modal.periodo && modal.periodo.fechaFin >= hoy ? diasEntre(hoy, modal.periodo.fechaFin) : 0;
+
+  const fechasModalValidas =
+    modal?.tipo === "iniciar" && !!modal.fechaInicio && !!modal.fechaFin && modal.fechaFin >= modal.fechaInicio;
+
   return (
     <div className="max-w-6xl mx-auto px-4 py-8 space-y-5">
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <h2 className="text-2xl font-bold text-gray-900">Vacaciones de vendedores</h2>
           <p className="mt-1 text-sm text-gray-500">
-            Marca a un vendedor como en vacaciones en Oracle CRM (<code>CTREnVacaciones_c</code>).
+            Cada vacación tiene fecha de regreso: al terminar, el vendedor vuelve solo a &quot;Trabajando&quot; en Oracle CRM
+            (<code>CTREnVacaciones_c</code>). Ver también el{" "}
+            <Link href="/modulos/microservicios/sistema-vacaciones/calendario" className="font-semibold text-emerald-700 hover:underline">
+              calendario
+            </Link>
+            .
           </p>
         </div>
         <button
@@ -173,7 +239,12 @@ export default function VacacionesClient() {
       </div>
 
       {aviso && (
-        <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">{aviso}</div>
+        <div className="flex items-start justify-between gap-3 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
+          <span>{aviso}</span>
+          <button onClick={() => setAviso(null)} aria-label="Cerrar aviso" className="text-emerald-700 hover:text-emerald-900">
+            ✕
+          </button>
+        </div>
       )}
 
       {error ? (
@@ -200,31 +271,64 @@ export default function VacacionesClient() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
-                {visibles.map((v) => (
-                  <tr key={v.partyNumber || v.partyId} className="hover:bg-gray-50">
-                    <td className="px-4 py-3">
-                      <div className="font-semibold text-gray-900">{v.nombre || "—"}</div>
-                      <div className="lg:hidden text-xs text-gray-500 break-all">{v.correo}</div>
-                    </td>
-                    <td className="hidden md:table-cell px-4 py-3 font-mono text-gray-600">{v.partyId || "—"}</td>
-                    <td className="hidden sm:table-cell px-4 py-3 font-mono text-gray-900">{v.partyNumber || "—"}</td>
-                    <td className="hidden lg:table-cell px-4 py-3 text-gray-600">{v.correo || "—"}</td>
-                    <td className="px-4 py-3">
-                      <EstadoBadge enVacaciones={v.enVacaciones} />
-                    </td>
-                    <td className="px-4 py-3 text-right">
-                      <button
-                        onClick={() => abrirConfirmacion(v)}
-                        disabled={!v.partyNumber}
-                        className={`whitespace-nowrap rounded-lg px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-40 ${
-                          v.enVacaciones ? "bg-gray-700 hover:bg-gray-800" : "bg-amber-500 hover:bg-amber-600"
-                        }`}
-                      >
-                        {v.enVacaciones ? "Finalizar vacaciones" : "Iniciar vacaciones"}
-                      </button>
-                    </td>
-                  </tr>
-                ))}
+                {visibles.map((v) => {
+                  const { enCurso, proximo } = periodosPorVendedor.get(v.partyNumber) ?? { enCurso: null, proximo: null };
+                  const sinFecha = v.enVacaciones && !enCurso;
+                  return (
+                    <tr key={v.partyNumber || v.partyId} className="hover:bg-gray-50">
+                      <td className="px-4 py-3">
+                        <div className="font-semibold text-gray-900">{v.nombre || "—"}</div>
+                        <div className="lg:hidden text-xs text-gray-500 break-all">{v.correo}</div>
+                      </td>
+                      <td className="hidden md:table-cell px-4 py-3 font-mono text-gray-600">{v.partyId || "—"}</td>
+                      <td className="hidden sm:table-cell px-4 py-3 font-mono text-gray-900">{v.partyNumber || "—"}</td>
+                      <td className="hidden lg:table-cell px-4 py-3 text-gray-600">{v.correo || "—"}</td>
+                      <td className="px-4 py-3">
+                        <EstadoBadge enVacaciones={v.enVacaciones} />
+                        {enCurso && (
+                          <div className="mt-1 text-xs text-gray-600">
+                            Vuelve el {formatoFecha(sumarDias(enCurso.fechaFin, 1), FECHA_LARGA)}
+                          </div>
+                        )}
+                        {sinFecha && <div className="mt-1 text-xs font-semibold text-red-600">Sin fecha de regreso</div>}
+                        {proximo && <div className="mt-1 text-xs text-sky-700">Programadas: {rangoTexto(proximo)}</div>}
+                      </td>
+                      <td className="px-4 py-3 text-right">
+                        <div className="flex flex-wrap justify-end gap-1.5">
+                          {sinFecha && (
+                            <button
+                              onClick={() =>
+                                abrir({ tipo: "iniciar", vendedor: v, fechaInicio: hoy, fechaFin: "", nota: "" })
+                              }
+                              className="whitespace-nowrap rounded-lg bg-amber-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-amber-600"
+                            >
+                              Poner fecha de regreso
+                            </button>
+                          )}
+                          {v.enVacaciones || enCurso ? (
+                            <button
+                              onClick={() => abrir({ tipo: "finalizar", vendedor: v, periodo: enCurso, motivo: "" })}
+                              disabled={!v.partyNumber}
+                              className="whitespace-nowrap rounded-lg bg-gray-700 px-3 py-1.5 text-xs font-semibold text-white hover:bg-gray-800 disabled:opacity-40"
+                            >
+                              Finalizar vacaciones
+                            </button>
+                          ) : (
+                            <button
+                              onClick={() =>
+                                abrir({ tipo: "iniciar", vendedor: v, fechaInicio: hoy, fechaFin: "", nota: "" })
+                              }
+                              disabled={!v.partyNumber}
+                              className="whitespace-nowrap rounded-lg bg-amber-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-amber-600 disabled:opacity-40"
+                            >
+                              Iniciar vacaciones
+                            </button>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
                 {!visibles.length && (
                   <tr>
                     <td colSpan={6} className="px-4 py-10 text-center text-gray-500">
@@ -241,53 +345,128 @@ export default function VacacionesClient() {
         </div>
       )}
 
-      {confirmar && (
+      {modal && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
-          onClick={() => !guardando && setConfirmar(null)}
+          onClick={() => !guardando && setModal(null)}
         >
           <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-xl" onClick={(e) => e.stopPropagation()}>
             <h3 className="text-lg font-bold text-gray-900">
-              {confirmar.enVacaciones ? "Finalizar vacaciones" : "Iniciar vacaciones"}
+              {modal.tipo === "finalizar"
+                ? diasRestantes
+                  ? "Terminar vacaciones antes de tiempo"
+                  : "Finalizar vacaciones"
+                : modal.vendedor.enVacaciones
+                  ? "Fecha de regreso"
+                  : "Iniciar vacaciones"}
             </h3>
             <dl className="mt-3 space-y-1 text-sm">
               <div>
                 <dt className="inline text-gray-500">Vendedor: </dt>
-                <dd className="inline font-semibold text-gray-900">{confirmar.nombre}</dd>
+                <dd className="inline font-semibold text-gray-900">{modal.vendedor.nombre}</dd>
               </div>
               <div>
                 <dt className="inline text-gray-500">Party Number: </dt>
-                <dd className="inline font-mono text-gray-900">{confirmar.partyNumber}</dd>
-              </div>
-              <div>
-                <dt className="inline text-gray-500">Estado actual: </dt>
-                <dd className="inline">
-                  <EstadoBadge enVacaciones={confirmar.enVacaciones} />
-                </dd>
+                <dd className="inline font-mono text-gray-900">{modal.vendedor.partyNumber}</dd>
               </div>
             </dl>
-            <p className="mt-4 text-sm text-gray-600">
-              {confirmar.enVacaciones
-                ? "El vendedor volverá a figurar como trabajando en Oracle CRM."
-                : "El vendedor quedará marcado como en vacaciones en Oracle CRM."}
-            </p>
+
+            {modal.tipo === "iniciar" ? (
+              <div className="mt-4 space-y-3">
+                <div className="grid grid-cols-2 gap-3">
+                  <label className="block text-sm">
+                    <span className="font-semibold text-gray-700">Desde</span>
+                    <input
+                      type="date"
+                      value={modal.fechaInicio}
+                      onChange={(e) => setModal({ ...modal, fechaInicio: e.target.value })}
+                      className="mt-1 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                    />
+                  </label>
+                  <label className="block text-sm">
+                    <span className="font-semibold text-gray-700">Hasta (último día)</span>
+                    <input
+                      type="date"
+                      value={modal.fechaFin}
+                      min={modal.fechaInicio > hoy ? modal.fechaInicio : hoy}
+                      onChange={(e) => setModal({ ...modal, fechaFin: e.target.value })}
+                      autoFocus
+                      className="mt-1 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                    />
+                  </label>
+                </div>
+                {modal.vendedor.enVacaciones && (
+                  <p className="text-xs text-gray-500">
+                    Ya está marcado en Oracle sin fechas. Si empezó antes, puedes poner la fecha real de inicio.
+                  </p>
+                )}
+                {fechasModalValidas && modal.fechaFin >= hoy && (
+                  <p className="text-sm text-gray-600">
+                    <span className="font-semibold text-gray-900">{diasEntre(modal.fechaInicio, modal.fechaFin)} días</span> ·{" "}
+                    {modal.fechaInicio <= hoy
+                      ? `Queda en vacaciones desde ya y vuelve solo a "Trabajando" el ${formatoFecha(sumarDias(modal.fechaFin, 1), FECHA_LARGA)}.`
+                      : `Se activa solo el ${formatoFecha(modal.fechaInicio, FECHA_LARGA)} y vuelve a "Trabajando" el ${formatoFecha(sumarDias(modal.fechaFin, 1), FECHA_LARGA)}.`}
+                  </p>
+                )}
+                <label className="block text-sm">
+                  <span className="font-semibold text-gray-700">Nota (opcional)</span>
+                  <input
+                    value={modal.nota}
+                    onChange={(e) => setModal({ ...modal, nota: e.target.value })}
+                    placeholder="Ej.: reemplazo, motivo…"
+                    className="mt-1 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                  />
+                </label>
+              </div>
+            ) : diasRestantes && modal.periodo ? (
+              <div className="mt-4 space-y-3">
+                <div className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-3 text-sm text-amber-900">
+                  <div className="font-semibold">⚠ Término anticipado</div>
+                  <p className="mt-1">
+                    Sus vacaciones eran del {rangoTexto(modal.periodo)} y debía volver el{" "}
+                    {formatoFecha(sumarDias(modal.periodo.fechaFin, 1), FECHA_LARGA)}. Si confirmas, vuelve a figurar como
+                    trabajando <strong>hoy</strong> y se pierden{" "}
+                    <strong>
+                      {diasRestantes} {diasRestantes === 1 ? "día" : "días"}
+                    </strong>{" "}
+                    de vacaciones (hoy incluido).
+                  </p>
+                </div>
+                <label className="block text-sm">
+                  <span className="font-semibold text-gray-700">Motivo (opcional)</span>
+                  <input
+                    value={modal.motivo}
+                    onChange={(e) => setModal({ ...modal, motivo: e.target.value })}
+                    placeholder="Ej.: regresó antes por cierre de campaña"
+                    autoFocus
+                    className="mt-1 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                  />
+                </label>
+                <p className="text-xs text-gray-500">Queda anotado en las vacaciones quién las terminó y por qué.</p>
+              </div>
+            ) : (
+              <p className="mt-4 text-sm text-gray-600">Volverá a figurar como trabajando en Oracle CRM.</p>
+            )}
+
             {errorCambio && (
               <div className="mt-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">{errorCambio}</div>
             )}
             <div className="mt-6 flex justify-end gap-2">
               <button
-                onClick={() => setConfirmar(null)}
+                onClick={() => setModal(null)}
                 disabled={guardando}
                 className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50 disabled:opacity-60"
               >
                 Cancelar
               </button>
               <button
-                onClick={() => void aplicarCambio()}
+                onClick={() => void aplicar()}
                 disabled={guardando}
-                className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700 disabled:opacity-60"
+                className={`rounded-lg px-4 py-2 text-sm font-semibold text-white disabled:opacity-60 ${
+                  diasRestantes ? "bg-amber-600 hover:bg-amber-700" : "bg-emerald-600 hover:bg-emerald-700"
+                }`}
               >
-                {guardando ? "Guardando…" : "Confirmar"}
+                {guardando ? "Guardando…" : diasRestantes ? "Terminar antes" : "Confirmar"}
               </button>
             </div>
           </div>

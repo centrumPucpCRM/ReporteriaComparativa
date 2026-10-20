@@ -63,6 +63,24 @@ async function sincronizarSinFallar(origen: string): Promise<string | null> {
   }
 }
 
+export type DatosVendedores = { hoy: string; vendedores: Vendedor[]; periodos: Periodo[]; aviso: string | null };
+
+/**
+ * Listado de Vendedores: sincroniza primero (así Oracle ya refleja quién volvió hoy) y trae
+ * los periodos en curso o futuros para mostrar la fecha de regreso.
+ */
+export async function obtenerPanelVendedores(): Promise<Resultado<DatosVendedores>> {
+  try {
+    const user = await requireUser();
+    const aviso = await sincronizarSinFallar(user.email ?? "usuario");
+    const hoy = hoyLima();
+    const [vendedores, periodos] = await Promise.all([listarVendedores(), listarPeriodos(hoy, "9999-12-31")]);
+    return { ok: true, data: { hoy, vendedores, periodos, aviso } };
+  } catch (e) {
+    return fallo(e);
+  }
+}
+
 export type DatosCalendario = { hoy: string; periodos: Periodo[]; aviso: string | null };
 
 /** Sincroniza (por si el cron no corrió) y devuelve los periodos que se cruzan con [desde, hasta]. */
@@ -102,6 +120,6 @@ export async function cancelarVacaciones(id: number): Promise<Resultado<string |
   return escribir((usuario) => cancelarPeriodo(id, usuario));
 }
 
-export async function terminarVacaciones(id: number): Promise<Resultado<string | null>> {
-  return escribir((usuario) => terminarPeriodo(id, usuario));
+export async function terminarVacaciones(id: number, motivo = ""): Promise<Resultado<string | null>> {
+  return escribir((usuario) => terminarPeriodo(id, usuario, motivo));
 }

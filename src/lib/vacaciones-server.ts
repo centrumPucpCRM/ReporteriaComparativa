@@ -160,15 +160,23 @@ export async function cancelarPeriodo(id: number, usuario: string): Promise<void
 /**
  * El vendedor vuelve a trabajar hoy: el periodo termina ayer (la sincronización lo finaliza
  * en Oracle). Si empezó hoy mismo no queda ningún día, así que se cancela y se desmarca ya.
+ * Si terminaba hoy o después (término anticipado) se deja constancia en la nota.
  */
-export async function terminarPeriodo(id: number, usuario: string): Promise<void> {
+export async function terminarPeriodo(id: number, usuario: string, motivo = ""): Promise<void> {
   const actual = await obtenerPeriodo(id);
   if (actual.estado !== "EN_CURSO") throw new Error("Solo se pueden terminar vacaciones en curso.");
-  const ayer = sumarDias(hoyLima(), -1);
+  const hoy = hoyLima();
+  const ayer = sumarDias(hoy, -1);
   const ahora = new Date().toISOString();
+  const constancia =
+    actual.fechaFin >= hoy
+      ? `Terminada anticipadamente el ${hoy} por ${usuario} (estaba hasta el ${actual.fechaFin})` +
+        (motivo.trim() ? `: ${motivo.trim()}` : "")
+      : "";
+  const nota = [actual.nota, constancia].filter(Boolean).join("\n") || null;
   if (actual.fechaInicio <= ayer) {
     const { error } = await db()
-      .update({ fecha_fin: ayer, actualizado_por: usuario, updated_at: ahora })
+      .update({ fecha_fin: ayer, nota, actualizado_por: usuario, updated_at: ahora })
       .eq("id", id)
       .eq("estado", "EN_CURSO");
     if (error) fallo(error);
@@ -176,7 +184,7 @@ export async function terminarPeriodo(id: number, usuario: string): Promise<void
   }
   await actualizarVacaciones(actual.partyNumber, false);
   const { error } = await db()
-    .update({ estado: "CANCELADA", error: null, actualizado_por: usuario, updated_at: ahora })
+    .update({ estado: "CANCELADA", error: null, nota, actualizado_por: usuario, updated_at: ahora })
     .eq("id", id)
     .eq("estado", "EN_CURSO");
   if (error) fallo(error);

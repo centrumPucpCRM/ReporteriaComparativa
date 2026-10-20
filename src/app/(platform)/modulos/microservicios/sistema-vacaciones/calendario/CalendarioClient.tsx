@@ -116,6 +116,7 @@ export default function CalendarioClient() {
   const [guardando, setGuardando] = useState(false);
   const [errorForm, setErrorForm] = useState<string | null>(null);
   const [confirmarFin, setConfirmarFin] = useState(false);
+  const [motivoFin, setMotivoFin] = useState("");
   const ultimaCarga = useRef(0);
 
   const cargar = useCallback(async (mesCargar: string) => {
@@ -158,12 +159,14 @@ export default function CalendarioClient() {
   function abrirNuevo(fecha: string) {
     setErrorForm(null);
     setConfirmarFin(false);
+    setMotivoFin("");
     setForm({ periodo: null, partyNumber: "", fechaInicio: fecha, fechaFin: fecha, nota: "" });
   }
 
   function abrirPeriodo(p: Periodo) {
     setErrorForm(null);
     setConfirmarFin(false);
+    setMotivoFin("");
     setForm({ periodo: p, partyNumber: p.partyNumber, fechaInicio: p.fechaInicio, fechaFin: p.fechaFin, nota: p.nota });
   }
 
@@ -199,7 +202,7 @@ export default function CalendarioClient() {
     if (!p) return;
     if (!confirmarFin) return setConfirmarFin(true);
     void ejecutar(
-      () => (p.estado === "EN_CURSO" ? terminarVacaciones(p.id) : cancelarVacaciones(p.id)),
+      () => (p.estado === "EN_CURSO" ? terminarVacaciones(p.id, motivoFin) : cancelarVacaciones(p.id)),
       p.estado === "EN_CURSO" ? `${p.vendedorNombre} vuelve a trabajar hoy.` : "Vacaciones canceladas.",
     );
   }
@@ -394,7 +397,7 @@ export default function CalendarioClient() {
                   <tr key={p.id} onClick={() => abrirPeriodo(p)} className="cursor-pointer hover:bg-gray-50">
                     <td className="px-4 py-3">
                       <div className="font-semibold text-gray-900">{p.vendedorNombre}</div>
-                      {p.nota && <div className="text-xs text-gray-500">{p.nota}</div>}
+                      {p.nota && <div className="whitespace-pre-line text-xs text-gray-500">{p.nota}</div>}
                     </td>
                     <td className="px-4 py-3 whitespace-nowrap text-gray-700">{rangoTexto(p)}</td>
                     <td className="hidden sm:table-cell px-4 py-3 text-gray-700">{diasEntre(p.fechaInicio, p.fechaFin)}</td>
@@ -515,6 +518,26 @@ export default function CalendarioClient() {
                     : ""}
                 </p>
               )}
+              {confirmarFin && form.periodo?.estado === "EN_CURSO" && form.periodo.fechaFin >= hoy && (
+                <div className="space-y-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-3 text-sm text-amber-900">
+                  <div className="font-semibold">⚠ Término anticipado</div>
+                  <p>
+                    Debía volver el {formatoFecha(sumarDias(form.periodo.fechaFin, 1), { weekday: "long", day: "numeric", month: "long" })}.
+                    Si confirmas, vuelve a figurar como trabajando <strong>hoy</strong> y se pierden{" "}
+                    <strong>
+                      {diasEntre(hoy, form.periodo.fechaFin)} {diasEntre(hoy, form.periodo.fechaFin) === 1 ? "día" : "días"}
+                    </strong>{" "}
+                    de vacaciones (hoy incluido).
+                  </p>
+                  <input
+                    value={motivoFin}
+                    onChange={(e) => setMotivoFin(e.target.value)}
+                    placeholder="Motivo (opcional)"
+                    autoFocus
+                    className="w-full rounded-lg border border-amber-300 bg-white px-3 py-2 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-amber-500"
+                  />
+                </div>
+              )}
               {errorForm && (
                 <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">{errorForm}</div>
               )}
@@ -531,7 +554,9 @@ export default function CalendarioClient() {
                     }`}
                   >
                     {confirmarFin
-                      ? "¿Confirmar?"
+                      ? form.periodo.estado === "EN_CURSO"
+                        ? "Terminar antes"
+                        : "¿Confirmar cancelación?"
                       : form.periodo.estado === "EN_CURSO"
                         ? "Terminar hoy"
                         : "Cancelar vacaciones"}

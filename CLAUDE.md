@@ -168,14 +168,14 @@ Migrado desde una página estática en S3 + dos Lambdas públicas (listar y PATC
 
 - **Listar**: `GET resourceUsers` con `UserStatus="A";IndividualRoleCode="SALES_REPRESENTATIVE"`, paginando por `hasMore`.
 - **Cambiar**: `PATCH resourceUsers/{ResourcePartyNumber}` con `{ CTREnVacaciones_c: boolean }` (igual que la Lambda original, que usaba el party number como id). Cada cambio deja una línea en los logs del servidor con el email del usuario.
-- La UI pide confirmación antes del PATCH y actualiza la fila con lo que devuelve Oracle (no recarga todo). La búsqueda tolera tildes y errores de tipeo (Levenshtein ≥ 70% desde 3 letras), como la página original.
+- La búsqueda tolera tildes y errores de tipeo (Levenshtein ≥ 70% desde 3 letras), como la página original.
 
 **Calendario** (`calendario/`): vacaciones programadas con fechas (días completos, hora Lima, `fecha_fin` inclusive) en `Sistema_vacaciones.periodo` ([sql/sistema_vacaciones.sql](sql/sistema_vacaciones.sql); el schema debe estar en Exposed schemas). Tipos y fechas compartidos en [src/lib/vacaciones.ts](src/lib/vacaciones.ts); Supabase + sincronización en [src/lib/vacaciones-server.ts](src/lib/vacaciones-server.ts) (server-only).
 
 - **Estados**: `PROGRAMADA → EN_CURSO → FINALIZADA`, o `PROGRAMADA → CANCELADA`. Un `exclude` gist impide dos periodos no cancelados del mismo vendedor que se crucen (error `23P01`).
 - **Sincronización** (`sincronizarPeriodos`, idempotente y se pone al día sola): PROGRAMADA que ya empezó → PATCH `true` → EN_CURSO; EN_CURSO que ya terminó → PATCH `false` → FINALIZADA (sin tocar Oracle si otro periodo del vendedor cubre hoy); PROGRAMADA que terminó sin empezar (fechas pasadas) → FINALIZADA sin Oracle. Si Oracle falla se guarda `error` y el estado no cambia (se reintenta). Corre en el cron diario de Vercel (`vercel.json`, `GET /api/sistema-vacaciones/sincronizar` con `Bearer CRON_SECRET`), al abrir el calendario y después de cada cambio.
-- **Edición**: PROGRAMADA cambia fechas o se cancela; EN_CURSO solo cambia la fecha de fin o se "termina hoy" (fin = ayer; si empezó hoy se cancela y se desmarca en Oracle al instante). El nombre y correo del vendedor se toman de Oracle al crear, no del navegador.
-- El botón manual del listado sigue siendo independiente: no crea ni modifica periodos.
+- **Edición**: PROGRAMADA cambia fechas o se cancela; EN_CURSO solo cambia la fecha de fin o se "termina hoy" (fin = ayer; si empezó hoy se cancela y se desmarca en Oracle al instante). Si terminaba hoy o después es un término anticipado: la UI lo advierte con los días que se pierden y pide un motivo opcional, y `terminarPeriodo` agrega a la nota quién, cuándo, la fecha original y el motivo. El nombre y correo del vendedor se toman de Oracle al crear, no del navegador.
+- **Listado de Vendedores** usa los mismos periodos (`obtenerPanelVendedores` sincroniza antes de leer Oracle): "Iniciar vacaciones" pide la fecha de regreso y crea un periodo (nunca marca sin fecha de fin), "Finalizar" hace `terminarPeriodo`, y cada fila muestra "Vuelve el …" / "Programadas: …". Un vendedor marcado en Oracle sin periodo EN_CURSO (marcado a mano o antes del calendario) sale como "Sin fecha de regreso", con botón para crearle el periodo; solo en ese caso "Finalizar" hace el PATCH `false` directo.
 
 ## Environment
 
