@@ -41,7 +41,8 @@ src/
     ├── (auth)/             # login + update-password (invite)
     ├── auth/               # callback, forgot, reset (route handlers + recovery pages)
     ├── api/                # REST endpoints (NOT session-guarded; own API-key auth)
-    │   └── infobip-ext/    # [table] CRUD + [table]/[id] + decidir-cola + _tables allowlist
+    │   ├── infobip-ext/    # [table] CRUD + [table]/[id] + decidir-cola + _tables allowlist
+    │   └── sistema-vacaciones/sincronizar/  # cron diario de Vercel (CRON_SECRET)
     ├── (platform)/         # session-authenticated app
     │   └── modulos/        # module hub
     │       ├── reporteria/      # dashboard comparativo + lib/ (standalone header)
@@ -67,7 +68,7 @@ src/
 - `/modulos/microservicios` → selector de microservicios (cards)
 - `/modulos/microservicios/infobip-ext` → home + sub-tablas (`conversation-lead-relation`, `sender-last-rdv`, `colas`) + `broadcast` (envío masivo, ver "Broadcast")
 - `/modulos/microservicios/eloqua-webhooks` → instrucciones de configuración + formulario de prueba
-- `/modulos/microservicios/sistema-vacaciones` → listado de vendedores activos y botón iniciar/finalizar vacaciones
+- `/modulos/microservicios/sistema-vacaciones` → listado de vendedores activos y botón iniciar/finalizar vacaciones; `calendario` → vacaciones programadas por fecha (ver "Sistema de Vacaciones")
 - `/api/infobip-ext/*` → REST API (see "REST API layer" below); not behind session auth
 
 **Two layout conventions coexist** — match the one already in the branch of the tree you're editing:
@@ -169,6 +170,13 @@ Migrado desde una página estática en S3 + dos Lambdas públicas (listar y PATC
 - **Cambiar**: `PATCH resourceUsers/{ResourcePartyNumber}` con `{ CTREnVacaciones_c: boolean }` (igual que la Lambda original, que usaba el party number como id). Cada cambio deja una línea en los logs del servidor con el email del usuario.
 - La UI pide confirmación antes del PATCH y actualiza la fila con lo que devuelve Oracle (no recarga todo). La búsqueda tolera tildes y errores de tipeo (Levenshtein ≥ 70% desde 3 letras), como la página original.
 
+**Calendario** (`calendario/`): vacaciones programadas con fechas (días completos, hora Lima, `fecha_fin` inclusive) en `Sistema_vacaciones.periodo` ([sql/sistema_vacaciones.sql](sql/sistema_vacaciones.sql); el schema debe estar en Exposed schemas). Tipos y fechas compartidos en [src/lib/vacaciones.ts](src/lib/vacaciones.ts); Supabase + sincronización en [src/lib/vacaciones-server.ts](src/lib/vacaciones-server.ts) (server-only).
+
+- **Estados**: `PROGRAMADA → EN_CURSO → FINALIZADA`, o `PROGRAMADA → CANCELADA`. Un `exclude` gist impide dos periodos no cancelados del mismo vendedor que se crucen (error `23P01`).
+- **Sincronización** (`sincronizarPeriodos`, idempotente y se pone al día sola): PROGRAMADA que ya empezó → PATCH `true` → EN_CURSO; EN_CURSO que ya terminó → PATCH `false` → FINALIZADA (sin tocar Oracle si otro periodo del vendedor cubre hoy); PROGRAMADA que terminó sin empezar (fechas pasadas) → FINALIZADA sin Oracle. Si Oracle falla se guarda `error` y el estado no cambia (se reintenta). Corre en el cron diario de Vercel (`vercel.json`, `GET /api/sistema-vacaciones/sincronizar` con `Bearer CRON_SECRET`), al abrir el calendario y después de cada cambio.
+- **Edición**: PROGRAMADA cambia fechas o se cancela; EN_CURSO solo cambia la fecha de fin o se "termina hoy" (fin = ayer; si empezó hoy se cancela y se desmarca en Oracle al instante). El nombre y correo del vendedor se toman de Oracle al crear, no del navegador.
+- El botón manual del listado sigue siendo independiente: no crea ni modifica periodos.
+
 ## Environment
 
 Required `.env.local` at the project root (gitignored via `.env*`):
@@ -187,6 +195,7 @@ ELOQUA_WEBHOOKS_API_KEY=<bearer token>         # gate para /api/eloqua-webhooks/
 ORACLE_CRM_USER=<usuario>                      # sistema-vacaciones: Basic auth REST de Oracle CRM
 ORACLE_CRM_PASSWORD=<password>                 # sistema-vacaciones
 ORACLE_CRM_URL=<https://xxxx.oraclecloud.com>   # sistema-vacaciones: host de la instancia, sin path
+CRON_SECRET=<token>                            # sistema-vacaciones: Vercel lo manda al cron de sincronización
 ```
 
 `admin.ts` reads env via `readEnvValue()`, which strips a stray `NAME=` prefix and surrounding quotes — so a value accidentally pasted as `SUPABASE_SERVICE_ROLE_KEY=eyJ...` still works.

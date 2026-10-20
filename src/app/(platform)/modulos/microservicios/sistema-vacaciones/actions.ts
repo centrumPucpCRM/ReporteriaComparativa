@@ -2,6 +2,17 @@
 
 import { requireUser } from "@/components/data-table/createTableActions";
 import { actualizarVacaciones, listarVendedores, type Vendedor } from "@/lib/oracle-crm";
+import { hoyLima, type Periodo } from "@/lib/vacaciones";
+import {
+  cancelarPeriodo,
+  crearPeriodo,
+  editarPeriodo,
+  listarPeriodos,
+  sincronizarPeriodos,
+  terminarPeriodo,
+  type NuevoPeriodo,
+  type ResumenSincronizacion,
+} from "@/lib/vacaciones-server";
 
 type Resultado<T> = { ok: true; data: T } | { ok: false; error: string };
 
@@ -31,4 +42,66 @@ export async function cambiarVacaciones(partyNumber: string, enVacaciones: boole
   } catch (e) {
     return fallo(e);
   }
+}
+
+// ── Calendario ──────────────────────────────────────────────────────────────
+
+/** Texto para la UI con lo que la sincronización hizo en Oracle, o null si no hizo nada. */
+function avisoSincronizacion(r: ResumenSincronizacion): string | null {
+  const partes: string[] = [];
+  if (r.iniciados.length) partes.push(`Vacaciones iniciadas en Oracle: ${r.iniciados.join(", ")}.`);
+  if (r.finalizados.length) partes.push(`Vacaciones finalizadas: ${r.finalizados.join(", ")}.`);
+  if (r.errores.length) partes.push(`No se pudo actualizar Oracle (se reintentará): ${r.errores.join(" · ")}`);
+  return partes.length ? partes.join(" ") : null;
+}
+
+async function sincronizarSinFallar(origen: string): Promise<string | null> {
+  try {
+    return avisoSincronizacion(await sincronizarPeriodos(origen));
+  } catch (e) {
+    return `No se pudo sincronizar con Oracle: ${e instanceof Error ? e.message : String(e)}`;
+  }
+}
+
+export type DatosCalendario = { hoy: string; periodos: Periodo[]; aviso: string | null };
+
+/** Sincroniza (por si el cron no corrió) y devuelve los periodos que se cruzan con [desde, hasta]. */
+export async function obtenerCalendario(desde: string, hasta: string): Promise<Resultado<DatosCalendario>> {
+  try {
+    const user = await requireUser();
+    const aviso = await sincronizarSinFallar(user.email ?? "usuario");
+    return { ok: true, data: { hoy: hoyLima(), periodos: await listarPeriodos(desde, hasta), aviso } };
+  } catch (e) {
+    return fallo(e);
+  }
+}
+
+async function escribir(accion: (usuario: string) => Promise<unknown>): Promise<Resultado<string | null>> {
+  try {
+    const user = await requireUser();
+    const usuario = user.email ?? user.id;
+    await accion(usuario);
+    return { ok: true, data: await sincronizarSinFallar(usuario) };
+  } catch (e) {
+    return fallo(e);
+  }
+}
+
+export async function programarVacaciones(input: NuevoPeriodo): Promise<Resultado<string | null>> {
+  return escribir((usuario) => crearPeriodo(input, usuario));
+}
+
+export async function guardarPeriodo(
+  id: number,
+  cambios: { fechaInicio: string; fechaFin: string; nota: string },
+): Promise<Resultado<string | null>> {
+  return escribir((usuario) => editarPeriodo(id, cambios, usuario));
+}
+
+export async function cancelarVacaciones(id: number): Promise<Resultado<string | null>> {
+  return escribir((usuario) => cancelarPeriodo(id, usuario));
+}
+
+export async function terminarVacaciones(id: number): Promise<Resultado<string | null>> {
+  return escribir((usuario) => terminarPeriodo(id, usuario));
 }

@@ -1,0 +1,8 @@
+{
+  "crons": [
+    {
+      "path": "/api/sistema-vacaciones/sincronizar",
+      "schedule": "5 5 * * *"
+    }
+  ]
+}

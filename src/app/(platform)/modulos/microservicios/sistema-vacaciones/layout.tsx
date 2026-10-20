@@ -32,6 +32,11 @@ export default function SistemaVacacionesLayout({ children }: { children: ReactN
               href: "/modulos/microservicios/sistema-vacaciones",
               icon: ICON_INICIO,
             },
+            {
+              label: "Calendario",
+              href: "/modulos/microservicios/sistema-vacaciones/calendario",
+              icon: ICON_VACACIONES,
+            },
           ],
         },
       ]}
