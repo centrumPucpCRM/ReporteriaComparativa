@@ -72,7 +72,7 @@ export default function PruebaRapida({ rama }: { rama: Rama }) {
           {rama !== "CORREO" && (
             <>
               <input value={f.celular} onChange={set("celular")} placeholder="Celular" className={`${input} font-mono`} />
-              <p className="text-[10px] text-violet-800">Envía un WhatsApp real de confirmación (en Test, siempre a 51991967975).</p>
+              <p className="text-[10px] text-violet-800">Envía un WhatsApp real a este número; válido solo si WhatsApp confirma la entrega.</p>
             </>
           )}
         </>

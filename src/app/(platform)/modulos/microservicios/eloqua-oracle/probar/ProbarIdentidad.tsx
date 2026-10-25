@@ -386,7 +386,7 @@ export default function ProbarIdentidad({ ambiente, estado }: { ambiente: Ambien
               <p className="-mt-2 text-xs text-gray-400">
                 {ambiente === "prod"
                   ? "En Prod el WhatsApp de confirmación se envía a este número."
-                  : "En Test el WhatsApp de confirmación siempre va al número de prueba 51991967975."}
+                  : "«Probar paso» envía el WhatsApp a este número. «Crear solicitud de prueba» (cola de Test) lo envía siempre al 51991967975."}
               </p>
             </>
           )}

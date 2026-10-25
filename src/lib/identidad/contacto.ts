@@ -6,9 +6,9 @@
  *   confirmación por SMTP (CORREO_SMTP_*) y se revisa cada segundo por IMAP el buzón del remitente:
  *   un rebote con el token del envío = el buzón no existe. Sin SMTP configurado se queda en el DNS.
  * - Teléfono: se le envía un WhatsApp de confirmación con una plantilla aprobada de Infobip y se
- *   consulta el estado cada segundo. Válido si el envío salió (entregado, o en camino sin error al
- *   terminar la espera); inválido si Infobip no lo acepta o WhatsApp lo rechaza / no lo puede entregar,
- *   y en ese caso el error y su detalle quedan en el evento.
+ *   consulta el estado cada segundo. Válido solo si WhatsApp confirma la entrega (DELIVERED);
+ *   inválido si Infobip no lo acepta, WhatsApp lo rechaza o no confirma la entrega en 25 s, y en ese
+ *   caso el error y su detalle quedan en el evento.
  *
  * Usa las credenciales reales de Infobip (INFOBIP_API_HOST / INFOBIP_API_KEY), no InfobipExt.
  */
@@ -116,7 +116,7 @@ export async function probarTelefono(celular: string, nombre: string, forzarA?: 
     };
   }
 
-  // Consulta de entrega cada segundo. Los logs tardan unos segundos en aparecer.
+  // Consulta de entrega cada segundo hasta DELIVERED o un fallo.
   const t0 = Date.now();
   let ultimo: EstadoEntrega | null = null;
   const consultas: string[] = [];
@@ -150,14 +150,20 @@ export async function probarTelefono(celular: string, nombre: string, forzarA?: 
   if (ultimo?.grupo === "DELIVERED") {
     return { valido: true, messageId, detalle: { ...comun, valido: true, entrega_confirmada: true } };
   }
+  // Sin entrega no se da por válido: con este remitente WhatsApp confirma en ~2 s (90% en menos de
+  // 7 s); un número sin WhatsApp, apagado o que bloqueó al remitente se queda PENDING sin fallar.
   return {
-    valido: true,
+    valido: false,
     messageId,
     detalle: {
       ...comun,
-      valido: true,
+      valido: false,
       entrega_confirmada: false,
-      nota: `El envío salió sin error; WhatsApp aún no confirma la entrega tras ${segundos} s (con el message_id se puede volver a consultar).`,
+      motivo: `WhatsApp no confirmó la entrega en ${segundos} s`,
+      error: {
+        estado: ultimo?.nombre ?? "SIN_REPORTE",
+        detalle: "El número no tiene WhatsApp, está apagado o bloqueó al remitente (un número normal confirma en ~2 s)",
+      },
     },
   };
 }

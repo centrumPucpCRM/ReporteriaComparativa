@@ -8,7 +8,7 @@ import { ejecutarIdentidad, type QuePrueba, type ResultadoIdentidad } from "@/li
 import { leerManifest } from "@/lib/identidad/padron";
 import { apiReniecConfigurada } from "@/lib/identidad/externa";
 import * as repo from "./_lib/repo";
-import { crearYEjecutar, ejecutarDesdePaso, resumen, telefonoPruebaDe, type LeadPrueba, type PasoInicio } from "./_lib/identidad";
+import { crearYEjecutar, ejecutarDesdePaso, resumen, type LeadPrueba, type PasoInicio } from "./_lib/identidad";
 
 const BASE = "/modulos/microservicios/eloqua-oracle";
 
@@ -87,7 +87,8 @@ export async function probarIdentidad(lead: LeadPrueba, que: QuePrueba, guardar:
       revalidatePath(BASE, "layout");
       return { ok: true, r, solicitudId: id };
     }
-    return { ok: true, r: await ejecutarIdentidad(lead, que, { telefonoPrueba: telefonoPruebaDe(ambiente) }), solicitudId: null };
+    // Prueba unitaria: el WhatsApp va al número escrito (el número de prueba solo se fuerza en la cola de Test).
+    return { ok: true, r: await ejecutarIdentidad(lead, que), solicitudId: null };
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : String(e) };
   }
