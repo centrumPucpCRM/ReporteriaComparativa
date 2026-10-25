@@ -3,7 +3,16 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import type { Vendedor } from "@/lib/oracle-crm";
-import { diasEntre, formatoFecha, sumarDias, type Periodo } from "@/lib/vacaciones";
+import {
+  contarDias,
+  diasEntre,
+  formatoFecha,
+  sumarDias,
+  type Jornada,
+  type Periodo,
+  type SaldoVendedor,
+  type TipoAusencia,
+} from "@/lib/vacaciones";
 import { cambiarVacaciones, obtenerPanelVendedores, programarVacaciones, terminarVacaciones } from "./actions";
 import ImportarExportar from "./_components/ImportarExportar";
 
@@ -11,7 +20,7 @@ type Filtro = "todos" | "vacaciones" | "trabajando";
 
 /** "iniciar" crea un periodo con fechas; "finalizar" lo termina hoy (o desmarca a mano si no hay periodo). */
 type Modal =
-  | { tipo: "iniciar"; vendedor: Vendedor; fechaInicio: string; fechaFin: string; nota: string }
+  | { tipo: "iniciar"; vendedor: Vendedor; tipoId: number; fechaInicio: string; fechaFin: string; nota: string }
   | { tipo: "finalizar"; vendedor: Vendedor; periodo: Periodo | null; motivo: string };
 
 const FECHA_LARGA: Intl.DateTimeFormatOptions = { weekday: "long", day: "numeric", month: "long" };
@@ -73,6 +82,9 @@ function EstadoBadge({ enVacaciones }: { enVacaciones: boolean }) {
 export default function VacacionesClient() {
   const [vendedores, setVendedores] = useState<Vendedor[] | null>(null);
   const [periodos, setPeriodos] = useState<Periodo[]>([]);
+  const [tipos, setTipos] = useState<TipoAusencia[]>([]);
+  const [saldos, setSaldos] = useState<SaldoVendedor[]>([]);
+  const [jornada, setJornada] = useState<Jornada>({ diasLaborales: [0, 1, 2, 3, 4], feriados: [] });
   const [hoy, setHoy] = useState("");
   const [cargando, setCargando] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -90,6 +102,9 @@ export default function VacacionesClient() {
     if (r.ok) {
       setVendedores(r.data.vendedores);
       setPeriodos(r.data.periodos);
+      setTipos(r.data.tipos);
+      setSaldos(r.data.saldos);
+      setJornada(r.data.jornada);
       setHoy(r.data.hoy);
       if (r.data.aviso) setAviso(r.data.aviso);
     } else {
@@ -130,9 +145,17 @@ export default function VacacionesClient() {
     );
   }, [vendedores, busqueda, filtro]);
 
+  const tipoPorId = useMemo(() => new Map(tipos.map((t) => [t.id, t])), [tipos]);
+  const saldoPorVendedor = useMemo(() => new Map(saldos.map((s) => [s.partyNumber, s])), [saldos]);
+  const tipoModal = modal?.tipo === "iniciar" ? tipoPorId.get(modal.tipoId) : undefined;
+
   function abrir(m: Modal) {
     setErrorCambio(null);
     setModal(m);
+  }
+
+  function abrirIniciar(v: Vendedor) {
+    abrir({ tipo: "iniciar", vendedor: v, tipoId: tipos.find((t) => t.activo)?.id ?? 0, fechaInicio: hoy, fechaFin: "", nota: "" });
   }
 
   async function aplicar() {
@@ -140,21 +163,25 @@ export default function VacacionesClient() {
     let r: { ok: true; data: unknown } | { ok: false; error: string };
     let exito: string;
     if (modal.tipo === "iniciar") {
+      if (!modal.tipoId) return setErrorCambio("Elige el tipo de ausencia.");
       if (!modal.fechaInicio || !modal.fechaFin) return setErrorCambio("Indica desde y hasta cuándo.");
       if (modal.fechaFin < modal.fechaInicio) return setErrorCambio("La fecha de fin no puede ser anterior a la de inicio.");
-      if (modal.fechaFin < hoy) return setErrorCambio("La fecha de fin ya pasó: para registrar vacaciones pasadas usa el calendario.");
+      if (modal.fechaFin < hoy) return setErrorCambio("La fecha de fin ya pasó: para registrar ausencias pasadas usa el calendario.");
+      if (tipoModal?.motivoRequerido && !modal.nota.trim()) return setErrorCambio(`${tipoModal.nombre} requiere un motivo.`);
       setGuardando(true);
       setErrorCambio(null);
       r = await programarVacaciones({
         partyNumber: modal.vendedor.partyNumber,
+        tipoId: modal.tipoId,
         fechaInicio: modal.fechaInicio,
         fechaFin: modal.fechaFin,
         nota: modal.nota,
       });
+      const nombreTipo = (tipoModal?.nombre ?? "Ausencia").toLowerCase();
       exito =
         modal.fechaInicio > hoy
-          ? `Vacaciones programadas para ${modal.vendedor.nombre} (${formatoFecha(modal.fechaInicio)} – ${formatoFecha(modal.fechaFin)}).`
-          : `${modal.vendedor.nombre} está de vacaciones hasta el ${formatoFecha(modal.fechaFin, FECHA_LARGA)}.`;
+          ? `${tipoModal?.nombre ?? "Ausencia"} programada para ${modal.vendedor.nombre} (${formatoFecha(modal.fechaInicio)} – ${formatoFecha(modal.fechaFin)}).`
+          : `${modal.vendedor.nombre} está con ${nombreTipo} hasta el ${formatoFecha(modal.fechaFin, FECHA_LARGA)}.`;
     } else {
       setGuardando(true);
       setErrorCambio(null);
@@ -185,6 +212,14 @@ export default function VacacionesClient() {
 
   const fechasModalValidas =
     modal?.tipo === "iniciar" && !!modal.fechaInicio && !!modal.fechaFin && modal.fechaFin >= modal.fechaInicio;
+  const diasModal =
+    fechasModalValidas && modal?.tipo === "iniciar"
+      ? tipoModal
+        ? contarDias(modal.fechaInicio, modal.fechaFin, tipoModal.conteo, jornada)
+        : diasEntre(modal.fechaInicio, modal.fechaFin)
+      : 0;
+  const saldoModal = modal?.tipo === "iniciar" && tipoModal?.descuentaSaldo ? saldoPorVendedor.get(modal.vendedor.partyNumber) : undefined;
+  const anio = hoy.slice(0, 4);
 
   return (
     <div className="max-w-6xl mx-auto px-4 py-8 space-y-5">
@@ -270,6 +305,7 @@ export default function VacacionesClient() {
                   <th className="hidden md:table-cell px-4 py-3">Party ID</th>
                   <th className="hidden sm:table-cell px-4 py-3">Party Number</th>
                   <th className="hidden lg:table-cell px-4 py-3">Correo</th>
+                  <th className="hidden md:table-cell px-4 py-3 text-right">Saldo {anio}</th>
                   <th className="px-4 py-3">Estado</th>
                   <th className="px-4 py-3 text-right">Acción</th>
                 </tr>
@@ -278,6 +314,7 @@ export default function VacacionesClient() {
                 {visibles.map((v) => {
                   const { enCurso, proximo } = periodosPorVendedor.get(v.partyNumber) ?? { enCurso: null, proximo: null };
                   const sinFecha = v.enVacaciones && !enCurso;
+                  const saldo = saldoPorVendedor.get(v.partyNumber);
                   return (
                     <tr key={v.partyNumber || v.partyId} className="hover:bg-gray-50">
                       <td className="px-4 py-3">
@@ -287,11 +324,26 @@ export default function VacacionesClient() {
                       <td className="hidden md:table-cell px-4 py-3 font-mono text-gray-600">{v.partyId || "—"}</td>
                       <td className="hidden sm:table-cell px-4 py-3 font-mono text-gray-900">{v.partyNumber || "—"}</td>
                       <td className="hidden lg:table-cell px-4 py-3 text-gray-600">{v.correo || "—"}</td>
+                      <td className="hidden md:table-cell px-4 py-3 text-right">
+                        {saldo ? (
+                          <span
+                            title={`Asignado ${saldo.asignado} · Transferido ${saldo.transferido} · Tomado ${saldo.tomado} · Programado ${saldo.programado}`}
+                            className={`rounded-md px-2 py-0.5 text-xs font-bold ${
+                              saldo.saldo < 0 ? "bg-red-100 text-red-700" : "bg-emerald-100 text-emerald-800"
+                            }`}
+                          >
+                            {saldo.saldo} d
+                          </span>
+                        ) : (
+                          "—"
+                        )}
+                      </td>
                       <td className="px-4 py-3">
                         <EstadoBadge enVacaciones={v.enVacaciones} />
                         {enCurso && (
                           <div className="mt-1 text-xs text-gray-600">
-                            Vuelve el {formatoFecha(sumarDias(enCurso.fechaFin, 1), FECHA_LARGA)}
+                            {tipoPorId.get(enCurso.tipoId)?.nombre ?? "Ausencia"} · vuelve el{" "}
+                            {formatoFecha(sumarDias(enCurso.fechaFin, 1), FECHA_LARGA)}
                           </div>
                         )}
                         {sinFecha && <div className="mt-1 text-xs font-semibold text-red-600">Sin fecha de regreso</div>}
@@ -301,9 +353,7 @@ export default function VacacionesClient() {
                         <div className="flex flex-wrap justify-end gap-1.5">
                           {sinFecha && (
                             <button
-                              onClick={() =>
-                                abrir({ tipo: "iniciar", vendedor: v, fechaInicio: hoy, fechaFin: "", nota: "" })
-                              }
+                              onClick={() => abrirIniciar(v)}
                               className="whitespace-nowrap rounded-lg bg-amber-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-amber-600"
                             >
                               Poner fecha de regreso
@@ -319,9 +369,7 @@ export default function VacacionesClient() {
                             </button>
                           ) : (
                             <button
-                              onClick={() =>
-                                abrir({ tipo: "iniciar", vendedor: v, fechaInicio: hoy, fechaFin: "", nota: "" })
-                              }
+                              onClick={() => abrirIniciar(v)}
                               disabled={!v.partyNumber}
                               className="whitespace-nowrap rounded-lg bg-amber-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-amber-600 disabled:opacity-40"
                             >
@@ -335,7 +383,7 @@ export default function VacacionesClient() {
                 })}
                 {!visibles.length && (
                   <tr>
-                    <td colSpan={6} className="px-4 py-10 text-center text-gray-500">
+                    <td colSpan={7} className="px-4 py-10 text-center text-gray-500">
                       No se encontraron vendedores.
                     </td>
                   </tr>
@@ -362,7 +410,7 @@ export default function VacacionesClient() {
                   : "Finalizar vacaciones"
                 : modal.vendedor.enVacaciones
                   ? "Fecha de regreso"
-                  : "Iniciar vacaciones"}
+                  : `Iniciar ${(tipoModal?.nombre ?? "ausencia").toLowerCase()}`}
             </h3>
             <dl className="mt-3 space-y-1 text-sm">
               <div>
@@ -377,6 +425,34 @@ export default function VacacionesClient() {
 
             {modal.tipo === "iniciar" ? (
               <div className="mt-4 space-y-3">
+                <label className="block text-sm">
+                  <span className="font-semibold text-gray-700">Tipo</span>
+                  <select
+                    value={modal.tipoId || ""}
+                    onChange={(e) => setModal({ ...modal, tipoId: Number(e.target.value) })}
+                    className="mt-1 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                  >
+                    {!tipos.length && <option value="">Sin tipos de ausencia</option>}
+                    {tipos
+                      .filter((t) => t.activo)
+                      .map((t) => (
+                        <option key={t.id} value={t.id}>
+                          {t.nombre}
+                        </option>
+                      ))}
+                  </select>
+                </label>
+                {saldoModal && (
+                  <p className="text-xs text-gray-600">
+                    Saldo {anio}:{" "}
+                    <span className={`font-bold ${saldoModal.disponibleAnual < 0 ? "text-red-700" : "text-emerald-700"}`}>
+                      {saldoModal.disponibleAnual} días disponibles
+                    </span>{" "}
+                    (asignado {saldoModal.asignado}
+                    {saldoModal.transferido ? ` + ${saldoModal.transferido} transferidos` : ""}, tomado {saldoModal.tomado}, programado{" "}
+                    {saldoModal.programado}).
+                  </p>
+                )}
                 <div className="grid grid-cols-2 gap-3">
                   <label className="block text-sm">
                     <span className="font-semibold text-gray-700">Desde</span>
@@ -406,14 +482,33 @@ export default function VacacionesClient() {
                 )}
                 {fechasModalValidas && modal.fechaFin >= hoy && (
                   <p className="text-sm text-gray-600">
-                    <span className="font-semibold text-gray-900">{diasEntre(modal.fechaInicio, modal.fechaFin)} días</span> ·{" "}
-                    {modal.fechaInicio <= hoy
-                      ? `Queda en vacaciones desde ya y vuelve solo a "Trabajando" el ${formatoFecha(sumarDias(modal.fechaFin, 1), FECHA_LARGA)}.`
-                      : `Se activa solo el ${formatoFecha(modal.fechaInicio, FECHA_LARGA)} y vuelve a "Trabajando" el ${formatoFecha(sumarDias(modal.fechaFin, 1), FECHA_LARGA)}.`}
+                    <span className="font-semibold text-gray-900">
+                      {diasModal} {diasModal === 1 ? "día" : "días"}
+                      {tipoModal?.conteo === "LABORAL" ? " laborales" : ""}
+                    </span>{" "}
+                    ·{" "}
+                    {tipoModal && !tipoModal.marcaOracle
+                      ? `${tipoModal.nombre} no cambia Oracle CRM: sigue recibiendo leads.`
+                      : modal.fechaInicio <= hoy
+                        ? `Queda ausente desde ya y vuelve solo a "Trabajando" el ${formatoFecha(sumarDias(modal.fechaFin, 1), FECHA_LARGA)}.`
+                        : `Se activa solo el ${formatoFecha(modal.fechaInicio, FECHA_LARGA)} y vuelve a "Trabajando" el ${formatoFecha(sumarDias(modal.fechaFin, 1), FECHA_LARGA)}.`}
                   </p>
                 )}
+                {saldoModal && fechasModalValidas && !tipoModal?.permiteSaldoNegativo && diasModal > saldoModal.disponibleAnual && (
+                  <div className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+                    Usa {diasModal} días y solo le quedan {saldoModal.disponibleAnual}: no se podrá guardar.
+                  </div>
+                )}
                 <label className="block text-sm">
-                  <span className="font-semibold text-gray-700">Nota (opcional)</span>
+                  <span className="font-semibold text-gray-700">
+                    {tipoModal?.motivoRequerido ? (
+                      <>
+                        Motivo <span className="text-red-600">*</span>
+                      </>
+                    ) : (
+                      "Nota (opcional)"
+                    )}
+                  </span>
                   <input
                     value={modal.nota}
                     onChange={(e) => setModal({ ...modal, nota: e.target.value })}

@@ -49,7 +49,7 @@ src/
     │       └── microservicios/  # ModuleShell sidebar modules
     │           ├── infobip-ext/      # CRUD tables driven by data-table lib
     │           ├── eloqua-webhooks/  # instrucciones + prueba del webhook Eloqua → Google Sheets
-    │           └── sistema-vacaciones/  # vendedores en vacaciones (Oracle CRM)
+    │           └── sistema-vacaciones/  # vendedores en vacaciones (Oracle CRM), ausencias, saldos, feriados
     └── page.tsx     # redirects to /modulos
 ```
 
@@ -68,7 +68,7 @@ src/
 - `/modulos/microservicios` → selector de microservicios (cards)
 - `/modulos/microservicios/infobip-ext` → home + sub-tablas (`conversation-lead-relation`, `sender-last-rdv`, `colas`) + `broadcast` (envío masivo, ver "Broadcast")
 - `/modulos/microservicios/eloqua-webhooks` → instrucciones de configuración + formulario de prueba
-- `/modulos/microservicios/sistema-vacaciones` → listado de vendedores activos y botón iniciar/finalizar vacaciones; `calendario` → vacaciones programadas por fecha (ver "Sistema de Vacaciones")
+- `/modulos/microservicios/sistema-vacaciones` → listado de vendedores activos y botón iniciar/finalizar vacaciones; `calendario` → ausencias programadas por fecha; `horario`, `movimientos`, `saldos`, `tipos`, `feriados`, `configuracion` (ver "Sistema de Vacaciones")
 - `/api/infobip-ext/*` → REST API (see "REST API layer" below); not behind session auth
 
 **Two layout conventions coexist** — match the one already in the branch of the tree you're editing:
@@ -176,7 +176,15 @@ Migrado desde una página estática en S3 + dos Lambdas públicas (listar y PATC
 - **Sincronización** (`sincronizarPeriodos`, idempotente y se pone al día sola): PROGRAMADA que ya empezó → PATCH `true` → EN_CURSO; EN_CURSO que ya terminó → PATCH `false` → FINALIZADA (sin tocar Oracle si otro periodo del vendedor cubre hoy); PROGRAMADA que terminó sin empezar (fechas pasadas) → FINALIZADA sin Oracle. Si Oracle falla se guarda `error` y el estado no cambia (se reintenta). Corre en el cron diario de Vercel (`vercel.json`, `GET /api/sistema-vacaciones/sincronizar` con `Bearer CRON_SECRET`), al abrir el calendario y después de cada cambio.
 - **Edición**: PROGRAMADA cambia fechas o se cancela; EN_CURSO solo cambia la fecha de fin o se "termina hoy" (fin = ayer; si empezó hoy se cancela y se desmarca en Oracle al instante). Si terminaba hoy o después es un término anticipado: la UI lo advierte con los días que se pierden y pide un motivo opcional, y `terminarPeriodo` agrega a la nota quién, cuándo, la fecha original y el motivo. El nombre y correo del vendedor se toman de Oracle al crear, no del navegador.
 - **Listado de Vendedores** usa los mismos periodos (`obtenerPanelVendedores` sincroniza antes de leer Oracle): "Iniciar vacaciones" pide la fecha de regreso y crea un periodo (nunca marca sin fecha de fin), "Finalizar" hace `terminarPeriodo`, y cada fila muestra "Vuelve el …" / "Programadas: …". Un vendedor marcado en Oracle sin periodo EN_CURSO (marcado a mano o antes del calendario) sale como "Sin fecha de regreso", con botón para crearle el periodo; solo en ese caso "Finalizar" hace el PATCH `false` directo.
-- **Importar / Exportar** ([_components/ImportarExportar.tsx](src/app/(platform)/modulos/microservicios/sistema-vacaciones/_components/ImportarExportar.tsx), en Vendedores y Calendario): por ahora solo botones con aviso "Próximamente". La idea es importar el archivo de vacaciones de otro sistema y crear los periodos; el formato se definirá con un archivo de ejemplo. Al implementarlo, crear los periodos con `crearPeriodo` (respeta el exclude de solapamiento y toma nombre/correo de Oracle) y luego `sincronizarPeriodos`.
+- **Importar / Exportar** ([_components/ImportarExportar.tsx](src/app/(platform)/modulos/microservicios/sistema-vacaciones/_components/ImportarExportar.tsx), en Vendedores y Calendario): Exportar descarga en CSV las ausencias del año en curso. Importar sigue con aviso "Próximamente": la idea es importar el archivo de vacaciones de otro sistema y crear los periodos; el formato se definirá con un archivo de ejemplo. Al implementarlo, crear los periodos con `crearPeriodo` (respeta el exclude de solapamiento, las reglas del tipo y el saldo, y toma nombre/correo de Oracle) y luego `sincronizarPeriodos`.
+
+Funcionalidad tomada del módulo "Permiso" de HR.my (capturas en `../audit/`, solo como referencia funcional; el diseño es el de la plataforma). SQL en [sql/sistema_vacaciones_002_tipos_saldos.sql](sql/sistema_vacaciones_002_tipos_saldos.sql) (correr después del primero):
+
+- **Tipos de ausencia** (`tipo`, vista `tipos/`): cada periodo tiene `tipo_id` (Vacaciones, Descanso médico, Licencia…). Por tipo: color, `conteo` (`CALENDARIO` o `LABORAL` = sin días no laborables ni feriados), `descuenta_saldo`, `permite_saldo_negativo`, `motivo_requerido` (nota obligatoria) y `marca_oracle`. Un tipo con `marca_oracle = false` pasa por los mismos estados pero la sincronización nunca toca Oracle; al finalizar un periodo solo se desmarca si ningún otro periodo **que marque** cubre hoy. No se puede cambiar `marca_oracle` con periodos EN_CURSO de ese tipo, ni el tipo de un periodo EN_CURSO. Un tipo con periodos no se elimina (FK): se desactiva.
+- **Saldos** (`saldo` + `configuracion`, vista `saldos/`): por vendedor y año, asignado (fila propia o `dias_por_anio` de la configuración) + transferido − tomado (hasta hoy) − programado (futuro) = saldo; con método `MENSUAL` lo adquirido es 1/12 por mes cumplido. Solo cuentan los tipos que descuentan, en el año (un periodo que cruza el 31/12 se reparte). `crearPeriodo` / `editarPeriodo` rechazan si los días superan `disponibleAnual` (asignado + transferido − tomado − programado, sin el propio periodo) salvo que el tipo permita saldo negativo. Cálculo puro en `calcularSaldo` ([src/lib/vacaciones.ts](src/lib/vacaciones.ts)), compartido con la UI.
+- **Feriados** (`feriado`, vista `feriados/`) y **días laborales** (`configuracion.dias_laborales`, 0 = lunes, vista `configuracion/`): alimentan el conteo `LABORAL`, el calendario (feriados en rojo) y el horario (gris).
+- **Horario** (`horario/`): vendedor × día del mes, con color del tipo (programadas tenues). **Movimientos** (`movimientos/`, acepta `?vendedor=&anio=`): todas las ausencias con filtros y CSV.
+- No se implementó el flujo de aprobación de HR.my (solicitud → revisión): aquí solo entran usuarios administradores, que programan directo.
 
 ## Environment
 

@@ -3,14 +3,18 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Vendedor } from "@/lib/oracle-crm";
 import {
+  CONTEO_LABEL,
   ESTADO_LABEL,
+  contarDias,
   diaSemana,
   diasEntre,
   formatoFecha,
   hoyLima,
   sumarDias,
   type EstadoPeriodo,
+  type Jornada,
   type Periodo,
+  type TipoAusencia,
 } from "@/lib/vacaciones";
 import {
   cancelarVacaciones,
@@ -21,6 +25,7 @@ import {
   terminarVacaciones,
 } from "../actions";
 import ImportarExportar from "../_components/ImportarExportar";
+import { TipoChip } from "../_components/comun";
 
 const DIAS = ["Lun", "Mar", "Mié", "Jue", "Vie", "Sáb", "Dom"];
 
@@ -102,12 +107,14 @@ function rangoTexto(p: { fechaInicio: string; fechaFin: string }): string {
     : `${formatoFecha(p.fechaInicio)} – ${formatoFecha(p.fechaFin)}`;
 }
 
-type Formulario = { periodo: Periodo | null; partyNumber: string; fechaInicio: string; fechaFin: string; nota: string };
+type Formulario = { periodo: Periodo | null; partyNumber: string; tipoId: number; fechaInicio: string; fechaFin: string; nota: string };
 
 export default function CalendarioClient() {
   const [mes, setMes] = useState(() => `${hoyLima().slice(0, 7)}-01`);
   const [hoy, setHoy] = useState(hoyLima);
   const [periodos, setPeriodos] = useState<Periodo[] | null>(null);
+  const [tipos, setTipos] = useState<TipoAusencia[]>([]);
+  const [jornada, setJornada] = useState<Jornada>({ diasLaborales: [0, 1, 2, 3, 4], feriados: [] });
   const [vendedores, setVendedores] = useState<Vendedor[] | null>(null);
   const [cargando, setCargando] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -129,6 +136,8 @@ export default function CalendarioClient() {
     if (n !== ultimaCarga.current) return; // ya se pidió otro mes
     if (r.ok) {
       setPeriodos(r.data.periodos);
+      setTipos(r.data.tipos);
+      setJornada(r.data.jornada);
       setHoy(r.data.hoy);
       if (r.data.aviso) setAviso(r.data.aviso);
     } else {
@@ -156,19 +165,28 @@ export default function CalendarioClient() {
   const delMes = filtrados.filter((p) => p.fechaInicio <= finMes && p.fechaFin >= mes);
   const enVacacionesHoy = filtrados.filter((p) => p.fechaInicio <= hoy && p.fechaFin >= hoy && p.estado === "EN_CURSO");
   const tituloMes = formatoFecha(mes, { month: "long", year: "numeric" });
+  const tipoPorId = useMemo(() => new Map(tipos.map((t) => [t.id, t])), [tipos]);
+  const feriadoPorFecha = useMemo(() => new Map(jornada.feriados.map((f) => [f.fecha, f.nombre])), [jornada]);
+  const tipoForm = form ? tipoPorId.get(form.tipoId) : undefined;
+
+  function dias(p: { tipoId: number; fechaInicio: string; fechaFin: string }): number {
+    const tipo = tipoPorId.get(p.tipoId);
+    return tipo ? contarDias(p.fechaInicio, p.fechaFin, tipo.conteo, jornada) : diasEntre(p.fechaInicio, p.fechaFin);
+  }
 
   function abrirNuevo(fecha: string) {
     setErrorForm(null);
     setConfirmarFin(false);
     setMotivoFin("");
-    setForm({ periodo: null, partyNumber: "", fechaInicio: fecha, fechaFin: fecha, nota: "" });
+    const tipoId = tipos.find((t) => t.activo)?.id ?? 0;
+    setForm({ periodo: null, partyNumber: "", tipoId, fechaInicio: fecha, fechaFin: fecha, nota: "" });
   }
 
   function abrirPeriodo(p: Periodo) {
     setErrorForm(null);
     setConfirmarFin(false);
     setMotivoFin("");
-    setForm({ periodo: p, partyNumber: p.partyNumber, fechaInicio: p.fechaInicio, fechaFin: p.fechaFin, nota: p.nota });
+    setForm({ periodo: p, partyNumber: p.partyNumber, tipoId: p.tipoId, fechaInicio: p.fechaInicio, fechaFin: p.fechaFin, nota: p.nota });
   }
 
   async function ejecutar(accion: () => Promise<{ ok: true; data: string | null } | { ok: false; error: string }>, exito: string) {
@@ -189,12 +207,14 @@ export default function CalendarioClient() {
   function guardar() {
     if (!form) return;
     if (!form.partyNumber) return setErrorForm("Elige un vendedor.");
+    if (!form.tipoId) return setErrorForm("Elige el tipo de ausencia.");
     if (!form.fechaInicio || !form.fechaFin) return setErrorForm("Completa las fechas.");
     if (form.fechaFin < form.fechaInicio) return setErrorForm("La fecha de fin no puede ser anterior a la de inicio.");
-    const datos = { fechaInicio: form.fechaInicio, fechaFin: form.fechaFin, nota: form.nota };
+    if (tipoForm?.motivoRequerido && !form.nota.trim()) return setErrorForm(`${tipoForm.nombre} requiere un motivo en la nota.`);
+    const datos = { tipoId: form.tipoId, fechaInicio: form.fechaInicio, fechaFin: form.fechaFin, nota: form.nota };
     void ejecutar(
       () => (form.periodo ? guardarPeriodo(form.periodo.id, datos) : programarVacaciones({ ...datos, partyNumber: form.partyNumber })),
-      form.periodo ? "Cambios guardados." : "Vacaciones programadas.",
+      form.periodo ? "Cambios guardados." : `${tipoForm?.nombre ?? "Ausencia"} programada.`,
     );
   }
 
@@ -213,10 +233,11 @@ export default function CalendarioClient() {
 
   function explicacion(f: Formulario): string {
     const p = f.periodo;
-    if (p?.estado === "FINALIZADA") return "Estas vacaciones ya terminaron.";
-    if (p?.estado === "CANCELADA") return "Estas vacaciones se cancelaron.";
+    if (p?.estado === "FINALIZADA") return "Esta ausencia ya terminó.";
+    if (p?.estado === "CANCELADA") return "Esta ausencia se canceló.";
     if (!fechasValidas) return "";
     if (f.fechaFin < hoy) return "Fechas pasadas: quedará como registro, sin cambiar Oracle CRM.";
+    if (tipoForm && !tipoForm.marcaOracle) return `${tipoForm.nombre} no cambia Oracle CRM: el vendedor sigue recibiendo leads.`;
     const vuelve = formatoFecha(sumarDias(f.fechaFin, 1), { weekday: "long", day: "numeric", month: "long" });
     if (f.fechaInicio <= hoy) {
       return p?.estado === "EN_CURSO"
@@ -233,7 +254,7 @@ export default function CalendarioClient() {
         <div>
           <h2 className="text-2xl font-bold text-gray-900">Calendario de vacaciones</h2>
           <p className="mt-1 text-sm text-gray-500">
-            Programa vacaciones con fecha: se activan y se desactivan solas en Oracle CRM.
+            Programa vacaciones y otras ausencias con fecha: se activan y se desactivan solas en Oracle CRM.
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -245,7 +266,7 @@ export default function CalendarioClient() {
             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
             </svg>
-            Programar vacaciones
+            Programar ausencia
           </button>
         </div>
       </div>
@@ -332,18 +353,20 @@ export default function CalendarioClient() {
               <div className="absolute inset-0 grid grid-cols-7">
                 {s.dias.map((d, i) => {
                   const fuera = d.slice(0, 7) !== mes.slice(0, 7);
+                  const feriado = feriadoPorFecha.get(d);
                   return (
                     <button
                       key={d}
                       onClick={() => abrirNuevo(d)}
-                      title={`Programar vacaciones desde el ${formatoFecha(d, { day: "numeric", month: "long" })}`}
-                      className={`flex items-start justify-end p-1.5 hover:bg-emerald-50 ${i < 6 ? "border-r border-gray-100" : ""} ${
-                        fuera ? "bg-gray-50" : ""
+                      title={`${feriado ? `Feriado: ${feriado}. ` : ""}Programar ausencia desde el ${formatoFecha(d, { day: "numeric", month: "long" })}`}
+                      className={`flex items-start justify-between gap-1 p-1.5 hover:bg-emerald-50 ${i < 6 ? "border-r border-gray-100" : ""} ${
+                        fuera ? "bg-gray-50" : feriado ? "bg-red-50/60" : ""
                       }`}
                     >
+                      <span className="hidden truncate pt-1 text-left text-[10px] font-semibold text-red-600 md:block">{feriado ?? ""}</span>
                       <span
-                        className={`flex h-6 w-6 items-center justify-center rounded-full text-xs font-semibold ${
-                          d === hoy ? "bg-emerald-600 text-white" : fuera ? "text-gray-300" : "text-gray-700"
+                        className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-xs font-semibold ${
+                          d === hoy ? "bg-emerald-600 text-white" : fuera ? "text-gray-300" : feriado ? "text-red-600" : "text-gray-700"
                         }`}
                       >
                         {Number(d.slice(8))}
@@ -360,12 +383,16 @@ export default function CalendarioClient() {
                   <button
                     key={b.periodo.id}
                     onClick={() => abrirPeriodo(b.periodo)}
-                    title={`${b.periodo.vendedorNombre} · ${rangoTexto(b.periodo)} · ${ESTADO_LABEL[b.periodo.estado]}`}
+                    title={`${b.periodo.vendedorNombre} · ${tipoPorId.get(b.periodo.tipoId)?.nombre ?? ""} · ${rangoTexto(b.periodo)} · ${ESTADO_LABEL[b.periodo.estado]}`}
                     style={{ gridColumn: `${b.col + 1} / span ${b.span}`, gridRow: b.carril + 1 }}
                     className={`pointer-events-auto flex min-w-0 items-center gap-1 px-1.5 text-left text-xs font-semibold ${ESTILO[b.periodo.estado].barra} ${
                       b.sigueAntes ? "ml-0 rounded-l-none border-l-0" : "ml-1 rounded-l-md"
                     } ${b.sigueDespues ? "mr-0 rounded-r-none border-r-0" : "mr-1 rounded-r-md"}`}
                   >
+                    <span
+                      className="h-2 w-2 shrink-0 rounded-full ring-1 ring-white/70"
+                      style={{ backgroundColor: tipoPorId.get(b.periodo.tipoId)?.color ?? "#9ca3af" }}
+                    />
                     {b.periodo.error && (
                       <span className="shrink-0 text-red-600" aria-label="Error al actualizar Oracle">
                         ⚠
@@ -391,6 +418,7 @@ export default function CalendarioClient() {
               <thead className="bg-gray-50 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
                 <tr>
                   <th className="px-4 py-3">Vendedor</th>
+                  <th className="hidden md:table-cell px-4 py-3">Tipo</th>
                   <th className="px-4 py-3">Fechas</th>
                   <th className="hidden sm:table-cell px-4 py-3">Días</th>
                   <th className="px-4 py-3">Estado</th>
@@ -403,8 +431,11 @@ export default function CalendarioClient() {
                       <div className="font-semibold text-gray-900">{p.vendedorNombre}</div>
                       {p.nota && <div className="whitespace-pre-line text-xs text-gray-500">{p.nota}</div>}
                     </td>
+                    <td className="hidden md:table-cell px-4 py-3">
+                      <TipoChip tipo={tipoPorId.get(p.tipoId)} />
+                    </td>
                     <td className="px-4 py-3 whitespace-nowrap text-gray-700">{rangoTexto(p)}</td>
-                    <td className="hidden sm:table-cell px-4 py-3 text-gray-700">{diasEntre(p.fechaInicio, p.fechaFin)}</td>
+                    <td className="hidden sm:table-cell px-4 py-3 text-gray-700">{dias(p)}</td>
                     <td className="px-4 py-3">
                       <div className="flex flex-wrap items-center gap-1.5">
                         <EstadoBadge estado={p.estado} />
@@ -415,8 +446,8 @@ export default function CalendarioClient() {
                 ))}
                 {!delMes.length && (
                   <tr>
-                    <td colSpan={4} className="px-4 py-10 text-center text-gray-500">
-                      {cargando ? "Cargando…" : "No hay vacaciones este mes. Haz clic en un día para programar."}
+                    <td colSpan={5} className="px-4 py-10 text-center text-gray-500">
+                      {cargando ? "Cargando…" : "No hay ausencias este mes. Haz clic en un día para programar."}
                     </td>
                   </tr>
                 )}
@@ -434,7 +465,7 @@ export default function CalendarioClient() {
           <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-xl" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-start justify-between gap-3">
               <h3 className="text-lg font-bold text-gray-900">
-                {form.periodo ? `Vacaciones de ${form.periodo.vendedorNombre}` : "Programar vacaciones"}
+                {form.periodo ? `${tipoForm?.nombre ?? "Ausencia"} de ${form.periodo.vendedorNombre}` : "Programar ausencia"}
               </h3>
               {form.periodo && <EstadoBadge estado={form.periodo.estado} />}
             </div>
@@ -460,6 +491,25 @@ export default function CalendarioClient() {
                   </select>
                 </label>
               )}
+
+              <label className="block text-sm">
+                <span className="font-semibold text-gray-700">Tipo</span>
+                <select
+                  value={form.tipoId || ""}
+                  onChange={(e) => setForm({ ...form, tipoId: Number(e.target.value) })}
+                  disabled={!editable || (!!form.periodo && form.periodo.estado !== "PROGRAMADA")}
+                  className="mt-1 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-emerald-500 disabled:bg-gray-50 disabled:text-gray-500"
+                >
+                  {!tipos.length && <option value="">Sin tipos de ausencia</option>}
+                  {tipos
+                    .filter((t) => t.activo || t.id === form.periodo?.tipoId)
+                    .map((t) => (
+                      <option key={t.id} value={t.id}>
+                        {t.nombre}
+                      </option>
+                    ))}
+                </select>
+              </label>
 
               <div className="grid grid-cols-2 gap-3">
                 <label className="block text-sm">
@@ -491,14 +541,23 @@ export default function CalendarioClient() {
               {fechasValidas && (
                 <p className="text-sm text-gray-600">
                   <span className="font-semibold text-gray-900">
-                    {diasEntre(form.fechaInicio, form.fechaFin)} {diasEntre(form.fechaInicio, form.fechaFin) === 1 ? "día" : "días"}
-                  </span>{" "}
-                  · {explicacion(form)}
+                    {dias(form)} {dias(form) === 1 ? "día" : "días"}
+                  </span>
+                  {tipoForm && <span className="text-gray-500"> ({CONTEO_LABEL[tipoForm.conteo].toLowerCase()})</span>} ·{" "}
+                  {explicacion(form)}
                 </p>
               )}
 
               <label className="block text-sm">
-                <span className="font-semibold text-gray-700">Nota (opcional)</span>
+                <span className="font-semibold text-gray-700">
+                  {tipoForm?.motivoRequerido ? (
+                    <>
+                      Motivo <span className="text-red-600">*</span>
+                    </>
+                  ) : (
+                    "Nota (opcional)"
+                  )}
+                </span>
                 <textarea
                   value={form.nota}
                   onChange={(e) => setForm({ ...form, nota: e.target.value })}
