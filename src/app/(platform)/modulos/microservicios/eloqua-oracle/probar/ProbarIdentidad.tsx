@@ -48,7 +48,7 @@ function Campo({
 }
 
 /** Lo que decidió el paso, en una línea (las decisiones son OK con la respuesta en el detalle). */
-function decision(e: EventoPaso): { texto: string; tono: "verde" | "rojo" | "ambar" | "gris" } | null {
+export function decision(e: EventoPaso): { texto: string; tono: "verde" | "rojo" | "ambar" | "gris" } | null {
   const d = e.detalle as Record<string, unknown>;
   if (e.resultado === "ERROR") return { texto: String(d.error ?? "Falló"), tono: "rojo" };
   if (e.resultado === "OMITIDO") return { texto: String(d.motivo ?? "No aplica"), tono: "gris" };
@@ -78,7 +78,7 @@ function decision(e: EventoPaso): { texto: string; tono: "verde" | "rojo" | "amb
   }
 }
 
-const TONO = {
+export const TONO = {
   verde: "text-emerald-700",
   rojo: "text-red-700",
   ambar: "text-amber-700",

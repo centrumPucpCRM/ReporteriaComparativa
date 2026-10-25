@@ -3,9 +3,10 @@
 import { useState } from "react";
 import Link from "next/link";
 import { DESCRIPCION_PASO, PASOS, etiquetaPaso, formatoFecha, type Cola, type PasoId } from "@/lib/eloqua-oracle";
-import { reintentarPaso } from "../actions";
+import { ejecutarDesde, reintentarPaso } from "../actions";
 import Canvas, { type Seleccion, type VistaNodo } from "./Canvas";
 import { BotonAccion } from "./controles";
+import PruebaRapida, { ramaIdentidad } from "./PruebaRapida";
 
 const BASE = "/modulos/microservicios/eloqua-oracle";
 
@@ -64,6 +65,9 @@ export default function CanvasCola({ cola }: { cola: Cola }) {
     );
   } else if (seleccion) {
     const c = cola.porPaso[seleccion];
+    const rama = ramaIdentidad(seleccion);
+    // Una atorada en la rama RUC se mueve a Validar RUC (el DNI ya pasó); cualquier otra, a Validar DNI.
+    const destino = rama === "RUC" ? "VALIDAR_RUC" : "VALIDAR_DNI";
     contenido = (
       <>
         <h4 className="font-bold text-gray-900">{etiquetaPaso(seleccion)}</h4>
@@ -92,6 +96,14 @@ export default function CanvasCola({ cola }: { cola: Cola }) {
                 {m.estado === "SIN_CONTACTO" && <span className="ml-2 rounded bg-rose-100 px-1.5 text-[10px] font-semibold text-rose-800">fuera de la cola</span>}
                 {m.estado === "EN_ESPERA" && <span className="ml-2 rounded bg-amber-100 px-1.5 text-[10px] font-semibold text-amber-800">en espera</span>}
                 {m.motivo && <div className="line-clamp-2 text-xs text-gray-500">{m.motivo}</div>}
+                <div className="mt-1">
+                  <BotonAccion
+                    accion={() => ejecutarDesde(m.id, destino)}
+                    label={`▶ Pasar a ${etiquetaPaso(destino)}`}
+                    variante="secundario"
+                    confirmar={`¿Mover la solicitud #${m.id} a «${etiquetaPaso(destino)}» y ejecutarla desde ahí?`}
+                  />
+                </div>
               </li>
             ))}
           </ul>
@@ -118,10 +130,11 @@ export default function CanvasCola({ cola }: { cola: Cola }) {
         ) : c?.fuera ? null : (
           <p className="text-xs text-gray-400">Nada detenido en este paso.</p>
         )}
+        {rama && <PruebaRapida key={rama} rama={rama} />}
       </>
     );
   } else {
-    contenido = <p className="text-sm text-gray-500">Haz clic en un paso para ver qué solicitudes están ahí y reintentarlas, o en la entrada para ver la cola.</p>;
+    contenido = <p className="text-sm text-gray-500">Haz clic en un paso para ver qué solicitudes están ahí y reintentarlas o pasarlas a Validar DNI / RUC, o en la entrada para ver la cola. En los pasos de DNI y RUC puedes probar un caso ahí mismo.</p>;
   }
 
   return (
