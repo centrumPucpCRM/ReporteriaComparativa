@@ -49,6 +49,7 @@ src/
     │       └── microservicios/  # ModuleShell sidebar modules
     │           ├── infobip-ext/      # CRUD tables driven by data-table lib
     │           ├── eloqua-webhooks/  # instrucciones + prueba del webhook Eloqua → Google Sheets
+    │           ├── eloqua-oracle/    # monitor de la cola Eloqua → Oracle (servicio en el EC2)
     │           └── sistema-vacaciones/  # vendedores en vacaciones (Oracle CRM), ausencias, saldos, feriados
     └── page.tsx     # redirects to /modulos
 ```
@@ -68,6 +69,7 @@ src/
 - `/modulos/microservicios` → selector de microservicios (cards)
 - `/modulos/microservicios/infobip-ext` → home + sub-tablas (`conversation-lead-relation`, `sender-last-rdv`, `colas`) + `broadcast` (envío masivo, ver "Broadcast")
 - `/modulos/microservicios/eloqua-webhooks` → instrucciones de configuración + formulario de prueba
+- `/modulos/microservicios/eloqua-oracle` → resumen + `procesados`, `errores`, `dni`, `duplicados`, `solicitud/[id]` (ver "Eloqua → Oracle")
 - `/modulos/microservicios/sistema-vacaciones` → listado de vendedores activos y botón iniciar/finalizar vacaciones; `calendario` → ausencias programadas por fecha; `horario`, `movimientos`, `saldos`, `tipos`, `feriados`, `configuracion` (ver "Sistema de Vacaciones")
 - `/api/infobip-ext/*` → REST API (see "REST API layer" below); not behind session auth
 
@@ -162,6 +164,35 @@ The per-table `actions.ts` must be a `"use server"` module that re-exports thin 
 - [src/lib/google-sheets.ts](src/lib/google-sheets.ts) habla con la Sheets API v4 firmando el JWT del service account con `node:crypto` (sin `googleapis`); token cacheado en memoria. Escribe con `valueInputOption=RAW` (un texto que empiece con "=" no se evalúa como fórmula).
 - Cada Google Sheet debe compartirse (edición) con el `client_email` del service account; si no, la API responde 403 con ese mensaje.
 
+## Eloqua → Oracle
+
+El procesamiento vive en otro repo (`IntegracionEloquaOracleSalesCloud`, Node/TS en el EC2 de InfobipExt). Aquí solo hay dos piezas:
+
+- **Puente** `POST /api/eloqua-oracle/{prod|test}/solicitudes` ([route.ts](src/app/api/eloqua-oracle/[ambiente]/solicitudes/route.ts)): el EC2 no tiene dominio HTTPS, así que Eloqua llama aquí. Valida `ELOQUA_ORACLE_API_KEY`, reenvía el body tal cual a `EC2_ELOQUA_ORACLE_URL_<AMB>/v1/solicitudes` con `EC2_ELOQUA_ORACLE_TOKEN_<AMB>` y devuelve la respuesta del EC2 (202). No guarda nada; si el EC2 no responde → 502.
+- **Módulo UI** que lee la cola en Supabase (schemas `Eloqua_oracle` / `Eloqua_oracle_test`, SQL en el otro repo). El ambiente (Prod / Test / Demo) se elige con la cookie `eloqua_oracle_ambiente`; **Demo** usa datos falsos de [_lib/demo.ts](src/app/(platform)/modulos/microservicios/eloqua-oracle/_lib/demo.ts) y sus acciones no escriben. Lecturas y escrituras en [_lib/repo.ts](src/app/(platform)/modulos/microservicios/eloqua-oracle/_lib/repo.ts); tipos y catálogo de pasos en [src/lib/eloqua-oracle.ts](src/lib/eloqua-oracle.ts).
+- **EN_ESPERA**: la identidad (DNI/RUC + nombre ≥75% con lo registrado) no pasó; se notificó al cliente con un id de seguimiento (`sql/002_seguimiento_cliente.sql`). No es un error: se desatora sola cuando llega la corrección con ese id. Vista `en-espera/`.
+- **SIN_CONTACTO** ("Ningún campo válido"): ni el correo ni el teléfono pasaron la prueba (decisión `CONTACTO_VALIDO` → paso `SIN_CONTACTO_VALIDO`). Estado final: sale de la cola y no se crea nada en Oracle. Vista `sin-contacto/`; en el lienzo de la cola solo cuentan las de hoy.
+- **DNI**: búsqueda siempre por igualdad exacta con y sin ceros a la izquierda (`normalizarDni` / `variantesDni` en `src/lib/eloqua-oracle.ts`: "3040421" ↔ "03040421"); nunca "contiene". `solicitud.dni` se guarda normalizado a 8 dígitos (bloqueo por DNI y auditoría).
+- **Contacto**: `BUSCAR_CONTACTO` → no existe: `CREAR_CONTACTO` · ya existe: `UNIFICAR_CONTACTOS` (si el DNI trae 2+: se queda el del lead más reciente, se le pasan leads y actividades por API y los vacíos se eliminan; registro en `duplicado_dni`, `sql/004_unificar_duplicados.sql`) → `ACTUALIZAR_CONTACTO`. DNI, nombre y RUC validados se marcan en el contacto (`dni_validado`, `nombre_validado`, `ruc_validado` en `CAMPOS_CALCULADOS`) y Oracle los bloquea; si ya estaban validados, el servicio no los toca. El bloqueo se configura en Oracle (Application Composer), no en el servicio. Los dos escriben solo el correo/celular que pasaron la prueba (nunca pisan un dato con uno inválido). Si el contacto existe y a Eloqua le falta un campo (o vino inválido), se recupera el de Oracle y el resto del flujo usa ese, salvo que el contacto haya marcado "No deseo más información" por ese canal (DoNotEmailFlag / DoNotCallFlag / DoNotContactFlag, por confirmar). En `CONFIRMAR_DNI_ORACLE` (búsqueda del DNI por nombre) se excluyen los candidatos que marcaron no ser contactados por ningún medio.
+- **Correo final** (`NOTIFICAR_CORREO`): solo correo al cliente, al final (donde se juntan las ramas de lead, antes de `FINALIZAR`); plantilla ADMISION o MASINFO según el formulario. El asunto lleva el origen en dos niveles: fuente (PAUTA, PÁGINA WEB, ORGÁNICO…) y detalle (TikTok, Instagram…); hoy se toman de `EloquaFuente_c` / `EloquaDetalle_c`, llaves por confirmar. Se omite si `correo_valido = false`. No escribe en Oracle.
+- **Infobip** (`INFOBIP_PERSONA` … `INFOBIP_ETIQUETAS`): una sola llamada a InfobipExt `/sales/active`, desglosada en sus pasos internos (recuadro en el lienzo; `NOTA` en `Canvas.tsx` dice qué pasa si cada uno falla). InfobipExt responde 200 aunque falle: hay que leer `success`. Análisis en `IntegracionEloquaOracleSalesCloud/reunion/INFOBIPEXT_FLUJO.md`.
+- **Correo y teléfono** (`VALIDAR_CORREO`, `VALIDAR_TELEFONO`, tras `VALIDAR`): nunca fallan; guardan `correo_valido` / `telefono_valido` (true/false, `sql/003_validacion_contacto.sql`) que se envían a Oracle (`CAMPOS_CALCULADOS`). El evento trae `detalle.valido` y el lienzo lo muestra como "válido · true" / "inválido · false".
+- **Reintentar** solo cambia la solicitud a `PENDIENTE` en Supabase; el worker del EC2 la retoma desde el paso que falló (cada paso persiste su resultado). Vercel nunca llama al worker.
+- La vista `solicitud/[id]` dibuja el flujo con [FlujoSolicitud](src/app/(platform)/modulos/microservicios/eloqua-oracle/_components/FlujoSolicitud.tsx) a partir de la tabla `evento` (último resultado por paso y programa).
+
+### Servicio de identidad (Validar DNI / Validar RUC)
+
+Los pasos de identidad del lienzo (`VALIDAR_DNI` … `NOTIFICAR_RUC`) se ejecutan **en esta app** ([src/lib/identidad/](src/lib/identidad/)), no en el EC2. Lógica portada de B2B-System (`src/lib/sunat/`) y DatosSunat (`lib_nombres.py`).
+
+- **Padrón de SUNAT en Storage**, bucket privado `identidad` (~940 MB, 8.144 archivos gzip): `dni/` (RUC 10 → DNI → nombre), `ruc/` (RUC 20/15/16/17), `nombres/` (índice para buscar personas por nombre) y `empresas/` (índice de razones sociales), más `manifest.json` (fecha y catálogos de estado/condición). Se carga con `node scripts/identidad/ingestar.ts` (local, Node 24 ejecuta TS directo; ~7 min; `scripts/` está excluido del tsconfig). Refrescarlo cada semana o mes.
+- [texto.ts](src/lib/identidad/texto.ts) es puro y SIN imports porque lo usa también el script: las claves de shard de la ingesta y de la búsqueda tienen que salir de las mismas funciones. Si se cambia `clavesIndicePersona` / `clavesIndiceEmpresa` / `SHARDS_*`, **hay que volver a correr la ingesta**. Personas se indexan por PATERNO+inicial del materno, MATERNO+inicial del paterno y PATERNO+inicial del 1er nombre (encuentra con un apellido mal escrito o con solo "nombre + paterno").
+- Umbral del flujo: 75% (`UMBRAL_IDENTIDAD`). Personas: `similitud` (algoritmo y penalidades de DatosSunat). Empresas: `similitudEmpresa` propia (cobertura pesada por largo de palabra y castigo por palabra del lead que no está), porque la de personas daba 96% a "PERU MINING" contra "Hochschild Mining Peru".
+- DNIs que no están en el padrón (nunca sacaron RUC): [externa.ts](src/lib/identidad/externa.ts) — cache en `identidad/cache/dni/`, luego API RENIEC (`DNI_API_URL` + `DNI_API_TOKEN`, varios tokens separados por coma) o eldni.com. **eldni.com no responde desde Vercel**: sin la API, en producción esos DNIs terminan en ERROR (reintentable), nunca en "no existe".
+- Oracle (solo lectura, [oracle-crm.ts](src/lib/oracle-crm.ts) `contactosPorDocumento` / `contactosPorRuc`): `PersonDEO_CTRTipodedocumento_c` (DNI, CE, PASs, CI) decide "¿extranjero?"; el RUC del contacto es `PersonDEO_CTRRUC_c`. El `q` de esta instancia no soporta `IN` ni `or`: una consulta por valor.
+- Convención de eventos: las decisiones son `OK` con la respuesta en `detalle` (`valido`, `extranjero`, `mejor`…); `ERROR` solo es fallo técnico. `NOTIFICAR_*` queda `OMITIDO`: la notificación al cliente es del worker.
+- **UI**: `probar/` = prueba unitaria con un lead escrito a mano ("Probar paso" no guarda; "Crear solicitud de prueba" solo en Test). En el lienzo de una solicitud, al seleccionar Validar DNI o Validar RUC aparece "▶ Ejecutar desde …" (estados PENDIENTE/ERROR/PARCIAL/EN_ESPERA/SIN_CONTACTO/DESCARTADO): la toma (EN_PROCESO condicional), corre los pasos, registra los eventos y la deja PENDIENTE en `ES_CORRECCION` con `payload._identidad` (datos oficiales + marcas `dni_validado`, `nombre_validado`, `ruc_validado`; `solicitud.dni` pasa al corregido), EN_ESPERA en `NOTIFICAR_*` o ERROR. Orquestación en [_lib/identidad.ts](src/app/(platform)/modulos/microservicios/eloqua-oracle/_lib/identidad.ts).
+- **API para el worker**: `POST /api/identidad/validar` (`Bearer IDENTIDAD_API_KEY`) con `{ dni, nombre, ruc, empresa, que: "DNI"|"RUC"|"AMBOS" }` devuelve los eventos y la salida de cada rama; no escribe en la cola.
+
 ## Sistema de Vacaciones
 
 Migrado desde una página estática en S3 + dos Lambdas públicas (listar y PATCH). Ahora todo pasa por server actions con `requireUser()` ([actions.ts](src/app/(platform)/modulos/microservicios/sistema-vacaciones/actions.ts)) que llaman a [src/lib/oracle-crm.ts](src/lib/oracle-crm.ts) (server-only, Basic auth desde env):
@@ -205,6 +236,12 @@ ORACLE_CRM_USER=<usuario>                      # sistema-vacaciones: Basic auth 
 ORACLE_CRM_PASSWORD=<password>                 # sistema-vacaciones
 ORACLE_CRM_URL=<https://xxxx.oraclecloud.com>   # sistema-vacaciones: host de la instancia, sin path
 CRON_SECRET=<token>                            # sistema-vacaciones: Vercel lo manda al cron de sincronización
+ELOQUA_ORACLE_API_KEY=<bearer token>           # eloqua-oracle: gate del puente /api/eloqua-oracle/*
+EC2_ELOQUA_ORACLE_URL_PROD=<http://ip:puerto>  # eloqua-oracle: API de ingesta en el EC2 (y _TEST)
+EC2_ELOQUA_ORACLE_TOKEN_PROD=<token interno>   # eloqua-oracle: token que valida el EC2 (y _TEST)
+IDENTIDAD_API_KEY=<bearer token>               # opcional: gate de /api/identidad/validar (worker del EC2)
+DNI_API_URL=<https://api.decolecta.com/v1/reniec/dni>  # opcional: DNIs fuera del padrón (eldni.com no funciona desde Vercel)
+DNI_API_TOKEN=<token1,token2>                  # opcional: tokens de esa API, rotan ante 429/401/403/5xx
 ```
 
 `admin.ts` reads env via `readEnvValue()`, which strips a stray `NAME=` prefix and surrounding quotes — so a value accidentally pasted as `SUPABASE_SERVICE_ROLE_KEY=eyJ...` still works.

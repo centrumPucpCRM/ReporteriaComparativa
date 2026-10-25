@@ -97,3 +97,73 @@ export async function actualizarVacaciones(partyNumber: string, enVacaciones: bo
   });
   return aVendedor(r);
 }
+
+// ─── Contactos (Eloqua → Oracle: pasos de identidad) ────────────────────────
+
+const CAMPOS_CONTACTO =
+  "PartyId,PartyNumber,ContactName,PersonDEO_CTRNrodedocumento_c,PersonDEO_CTRTipodedocumento_c,PersonDEO_CTRRUC_c,DoNotContactFlag";
+
+export type ContactoOracle = {
+  partyId: string;
+  partyNumber: string;
+  nombre: string;
+  documento: string;
+  /** DNI, CE (carné de extranjería), PASs (pasaporte), CI… según Oracle. */
+  tipoDocumento: string;
+  ruc: string;
+  /** Marcó que no desea ser contactado por ningún medio. */
+  noContactar: boolean;
+};
+
+type ContactoCrudo = {
+  PartyId?: number | string | null;
+  PartyNumber?: string | null;
+  ContactName?: string | null;
+  PersonDEO_CTRNrodedocumento_c?: string | null;
+  PersonDEO_CTRTipodedocumento_c?: string | null;
+  PersonDEO_CTRRUC_c?: string | null;
+  DoNotContactFlag?: boolean | null;
+};
+
+/**
+ * Contactos con un campo igual a alguno de los valores. Una consulta por valor: el `q` de esta
+ * instancia no resuelve `IN (...)` ni `or` (devuelven 0 o solo el primero), verificado contra la API.
+ */
+async function contactosDonde(campo: string, valores: string[]): Promise<ContactoOracle[]> {
+  const unicos = [...new Set(valores.map((v) => v.trim()).filter(Boolean))];
+  const porId = new Map<string, ContactoOracle>();
+  await Promise.all(
+    unicos.map(async (v) => {
+      const params = new URLSearchParams({
+        fields: CAMPOS_CONTACTO,
+        q: `${campo}='${v.replace(/'/g, "''")}'`,
+        onlyData: "true",
+        limit: "20",
+      });
+      const page = await oracleFetch<{ items?: ContactoCrudo[] }>(`/contacts?${params}`);
+      for (const c of page.items ?? []) {
+        const partyId = c.PartyId != null ? String(c.PartyId) : "";
+        porId.set(partyId, {
+          partyId,
+          partyNumber: c.PartyNumber ?? "",
+          nombre: c.ContactName ?? "",
+          documento: c.PersonDEO_CTRNrodedocumento_c ?? "",
+          tipoDocumento: c.PersonDEO_CTRTipodedocumento_c ?? "",
+          ruc: c.PersonDEO_CTRRUC_c ?? "",
+          noContactar: c.DoNotContactFlag === true,
+        });
+      }
+    }),
+  );
+  return [...porId.values()];
+}
+
+/** Contactos cuyo N° de documento es exactamente alguna de las variantes (con y sin ceros a la izquierda). */
+export function contactosPorDocumento(variantes: string[]): Promise<ContactoOracle[]> {
+  return contactosDonde("PersonDEO_CTRNrodedocumento_c", variantes);
+}
+
+/** Contactos que tienen registrado ese RUC. */
+export function contactosPorRuc(ruc: string): Promise<ContactoOracle[]> {
+  return contactosDonde("PersonDEO_CTRRUC_c", [ruc]);
+}

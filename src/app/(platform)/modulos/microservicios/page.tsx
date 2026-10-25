@@ -50,6 +50,18 @@ const SUBMODULOS = [
       </svg>
     ),
   },
+  {
+    slug: "eloqua-oracle",
+    titulo: "Eloqua → Oracle",
+    subtitulo: "Cola de leads de Eloqua",
+    descripcion: "Leads que envía Eloqua a Oracle Sales Cloud: procesados, errores con reintento, duplicados y auditoría por DNI.",
+    iconColor: "bg-indigo-50 text-indigo-600",
+    icon: (
+      <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" />
+      </svg>
+    ),
+  },
 ];
 
 export default function MicroserviciosPage() {
