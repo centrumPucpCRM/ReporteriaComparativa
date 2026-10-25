@@ -374,3 +374,55 @@ export async function ensureTag(name: string): Promise<boolean> {
 export async function addTag(conversationId: string, tagName: string) {
   return request("POST", `/ccaas/1/conversations/${encodeURIComponent(conversationId)}/tags`, { tagName });
 }
+
+// ==================== Mensaje directo (sin conversación CCaaS) ====================
+
+export interface EnvioDirecto {
+  messageId: string | null;
+  /** Estado que devuelve Infobip al aceptar el envío (PENDING si lo tomó; REJECTED si no). */
+  grupo: string;
+  nombre: string;
+  descripcion: string;
+}
+
+/**
+ * Envía una plantilla WhatsApp directo al número (`/whatsapp/1/message/template`), sin crear
+ * conversación en CCaaS. La usa la prueba de teléfono de Eloqua → Oracle. `placeholders` son las
+ * variables del cuerpo en orden ({{1}}, {{2}}…).
+ */
+export async function enviarPlantillaDirecta(input: {
+  from: string;
+  to: string;
+  templateName: string;
+  language: string;
+  placeholders: string[];
+}): Promise<InfobipResponse<EnvioDirecto>> {
+  const r = await request<{ messages?: { messageId?: string; status?: { groupName?: string; name?: string; description?: string } }[] }>(
+    "POST",
+    "/whatsapp/1/message/template",
+    {
+      messages: [
+        {
+          from: input.from,
+          to: input.to,
+          content: {
+            templateName: input.templateName,
+            templateData: { body: { placeholders: input.placeholders } },
+            language: input.language,
+          },
+        },
+      ],
+    },
+  );
+  if (!r.ok) return { ...r, data: null };
+  const m = r.data?.messages?.[0];
+  return {
+    ...r,
+    data: {
+      messageId: m?.messageId ?? null,
+      grupo: m?.status?.groupName ?? "",
+      nombre: m?.status?.name ?? "",
+      descripcion: m?.status?.description ?? "",
+    },
+  };
+}

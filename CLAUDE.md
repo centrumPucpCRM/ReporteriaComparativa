@@ -191,7 +191,9 @@ Los pasos de identidad del lienzo (`VALIDAR_DNI` … `NOTIFICAR_RUC`) se ejecuta
 - Oracle (solo lectura, [oracle-crm.ts](src/lib/oracle-crm.ts) `contactosPorDocumento` / `contactosPorRuc`): `PersonDEO_CTRTipodedocumento_c` (DNI, CE, PASs, CI) decide "¿extranjero?"; el RUC del contacto es `PersonDEO_CTRRUC_c`. El `q` de esta instancia no soporta `IN` ni `or`: una consulta por valor.
 - Convención de eventos: las decisiones son `OK` con la respuesta en `detalle` (`valido`, `extranjero`, `mejor`…); `ERROR` solo es fallo técnico. `NOTIFICAR_*` queda `OMITIDO`: la notificación al cliente es del worker.
 - **UI**: `probar/` = prueba unitaria con un lead escrito a mano ("Probar paso" no guarda; "Crear solicitud de prueba" solo en Test). En el lienzo de una solicitud, al seleccionar Validar DNI o Validar RUC aparece "▶ Ejecutar desde …" (estados PENDIENTE/ERROR/PARCIAL/EN_ESPERA/SIN_CONTACTO/DESCARTADO): la toma (EN_PROCESO condicional), corre los pasos, registra los eventos y la deja PENDIENTE en `ES_CORRECCION` con `payload._identidad` (datos oficiales + marcas `dni_validado`, `nombre_validado`, `ruc_validado`; `solicitud.dni` pasa al corregido), EN_ESPERA en `NOTIFICAR_*` o ERROR. Orquestación en [_lib/identidad.ts](src/app/(platform)/modulos/microservicios/eloqua-oracle/_lib/identidad.ts).
-- **API para el worker**: `POST /api/identidad/validar` (`Bearer IDENTIDAD_API_KEY`) con `{ dni, nombre, ruc, empresa, que: "DNI"|"RUC"|"AMBOS" }` devuelve los eventos y la salida de cada rama; no escribe en la cola.
+- **API para el worker**: `POST /api/identidad/validar` (`Bearer IDENTIDAD_API_KEY`) con `{ dni, nombre, ruc, empresa, correo, celular, que: "CORREO"|"TELEFONO"|"CONTACTO"|"DNI"|"RUC"|"AMBOS"|"TODO" }` devuelve los eventos y la salida de cada rama; no escribe en la cola.
+- **Validar correo / Validar teléfono** ([contacto.ts](src/lib/identidad/contacto.ts)) son unitarios (`que: "CORREO"` / `"TELEFONO"` → `final: "MARCA"`: solo dejan `correo_valido` / `telefono_valido`, no detienen el flujo; `CONTACTO_VALIDO` decide con las dos). Teléfono: WhatsApp con la plantilla `contacto1_alerta_ventas_v1` por las credenciales reales de Infobip (`INFOBIP_API_*`, no InfobipExt) y entrega consultada cada segundo en `/messages-api/1/logs` (hasta 25 s); en Test siempre va a `51991967975`. Correo: sintaxis, dominio mal escrito/desechable, MX por DNS-over-HTTPS (el DNS de Node fallaba) y, con `CORREO_SMTP_*`, un correo de confirmación con token + revisión del buzón del remitente por IMAP cada segundo (hasta 25 s): un rebote con el token = inválido (Gmail rebota en ~2 s). En `CONTACTO`/`TODO` los dos corren en paralelo para no pasar los 60 s de la función.
+- Columnas `correo_valido`, `telefono_valido`, `telefono_prueba_id` y estados EN_ESPERA/SIN_CONTACTO requieren las migraciones 002–004 de `IntegracionEloquaOracleSalesCloud/sql/`.
 
 ## Sistema de Vacaciones
 
@@ -242,6 +244,8 @@ EC2_ELOQUA_ORACLE_TOKEN_PROD=<token interno>   # eloqua-oracle: token que valida
 IDENTIDAD_API_KEY=<bearer token>               # opcional: gate de /api/identidad/validar (worker del EC2)
 DNI_API_URL=<https://api.decolecta.com/v1/reniec/dni>  # opcional: DNIs fuera del padrón (eldni.com no funciona desde Vercel)
 DNI_API_TOKEN=<token1,token2>                  # opcional: tokens de esa API, rotan ante 429/401/403/5xx
+CORREO_SMTP_HOST / CORREO_SMTP_PUERTO / CORREO_SMTP_USUARIO / CORREO_SMTP_CLAVE  # opcional: correo de confirmación de Validar correo
+CORREO_IMAP_HOST / CORREO_REMITENTE / CORREO_REMITENTE_NOMBRE                     # IMAP del mismo buzón para leer rebotes
 ```
 
 `admin.ts` reads env via `readEnvValue()`, which strips a stray `NAME=` prefix and surrounding quotes — so a value accidentally pasted as `SUPABASE_SERVICE_ROLE_KEY=eyJ...` still works.

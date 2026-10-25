@@ -8,7 +8,7 @@ import { ejecutarIdentidad, type QuePrueba, type ResultadoIdentidad } from "@/li
 import { leerManifest } from "@/lib/identidad/padron";
 import { apiReniecConfigurada } from "@/lib/identidad/externa";
 import * as repo from "./_lib/repo";
-import { crearYEjecutar, ejecutarDesdePaso, resumen, type LeadPrueba, type PasoInicio } from "./_lib/identidad";
+import { crearYEjecutar, ejecutarDesdePaso, resumen, telefonoPruebaDe, type LeadPrueba, type PasoInicio } from "./_lib/identidad";
 
 const BASE = "/modulos/microservicios/eloqua-oracle";
 
@@ -60,7 +60,7 @@ export async function reanudar(): Promise<Resultado> {
 
 // ─── Pasos de identidad (Validar DNI / Validar RUC) ──────────────────────────
 
-/** Mueve una solicitud atorada a Validar DNI o Validar RUC y ejecuta los pasos desde ahí. */
+/** Mueve una solicitud atorada a Validar correo, Validar DNI o Validar RUC y ejecuta los pasos desde ahí. */
 export async function ejecutarDesde(id: number, paso: PasoInicio): Promise<Resultado> {
   return ejecutar(async (amb, usuario) => resumen(await ejecutarDesdePaso(amb, id, paso, usuario)));
 }
@@ -76,15 +76,18 @@ export type ResultadoPrueba =
 export async function probarIdentidad(lead: LeadPrueba, que: QuePrueba, guardar: boolean): Promise<ResultadoPrueba> {
   try {
     const user = await requireUser();
-    if (!lead.dni.trim() && que !== "RUC") return { ok: false, error: "Falta el DNI" };
+    if (!lead.dni.trim() && ["DNI", "AMBOS", "TODO"].includes(que)) return { ok: false, error: "Falta el DNI" };
     if (!lead.ruc.trim() && que === "RUC") return { ok: false, error: "Falta el RUC" };
+    if (que === "CORREO" && !lead.correo.trim()) return { ok: false, error: "Falta el correo" };
+    if (que === "TELEFONO" && !lead.celular.trim()) return { ok: false, error: "Falta el celular" };
+    if (que === "CONTACTO" && !lead.correo.trim() && !lead.celular.trim()) return { ok: false, error: "Falta el correo o el celular" };
+    const ambiente = await repo.leerAmbiente();
     if (guardar) {
-      const ambiente = await repo.leerAmbiente();
       const { id, r } = await crearYEjecutar(ambiente, lead, que, user.email ?? user.id);
       revalidatePath(BASE, "layout");
       return { ok: true, r, solicitudId: id };
     }
-    return { ok: true, r: await ejecutarIdentidad(lead, que), solicitudId: null };
+    return { ok: true, r: await ejecutarIdentidad(lead, que, { telefonoPrueba: telefonoPruebaDe(ambiente) }), solicitudId: null };
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : String(e) };
   }

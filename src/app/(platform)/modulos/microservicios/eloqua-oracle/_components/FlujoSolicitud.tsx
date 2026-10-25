@@ -29,7 +29,12 @@ const RAMA_CREAR: PasoId[] = [
 const RAMA_ACTUALIZAR: PasoId[] = ["ACTUALIZAR_LEAD"];
 const MARCA: PasoId[] = ["VALIDAR_CORREO", "VALIDAR_TELEFONO"];
 /** Pasos a los que se puede mover una solicitud atorada para ejecutarlos desde la plataforma. */
-const EJECUTABLES: Partial<Record<PasoId, "VALIDAR_DNI" | "VALIDAR_RUC">> = { VALIDAR_DNI: "VALIDAR_DNI", VALIDAR_RUC: "VALIDAR_RUC" };
+const EJECUTABLES: Partial<Record<PasoId, "VALIDAR_CORREO" | "VALIDAR_TELEFONO" | "VALIDAR_DNI" | "VALIDAR_RUC">> = {
+  VALIDAR_CORREO: "VALIDAR_CORREO",
+  VALIDAR_TELEFONO: "VALIDAR_TELEFONO",
+  VALIDAR_DNI: "VALIDAR_DNI",
+  VALIDAR_RUC: "VALIDAR_RUC",
+};
 const ESTADOS_MOVIBLES = ["PENDIENTE", "ERROR", "PARCIAL", "EN_ESPERA", "SIN_CONTACTO", "DESCARTADO"];
 
 const NIVEL = Object.fromEntries(PASOS.map((p) => [p.id, p.nivel])) as Record<PasoId, "solicitud" | "programa">;
@@ -185,8 +190,12 @@ export default function FlujoSolicitud({ detalle }: { detalle: DetalleSolicitud 
     return (
       <div className="space-y-2 rounded-lg border border-violet-200 bg-violet-50 p-3 text-xs text-violet-900">
         <p>
-          <span className="font-semibold">Mover aquí y ejecutar.</span> Corre {etiquetaPaso(d)} y sus pasos siguientes de identidad con los datos del
-          payload. Si pasa, la solicitud queda pendiente en «¿Es corrección?» para que el worker continúe; si no, en espera del cliente.
+          <span className="font-semibold">Mover aquí y ejecutar.</span> Corre {etiquetaPaso(d)} y los pasos de validación siguientes con los datos del payload
+          {d === "VALIDAR_CORREO"
+            ? " (envía un correo y un WhatsApp reales de confirmación; en Test, el WhatsApp va al 51991967975)"
+            : d === "VALIDAR_TELEFONO"
+              ? " (envía un WhatsApp real de confirmación; en Test, al 51991967975)"
+              : ""}. Si pasa, la solicitud queda pendiente en «¿Es corrección?» para que el worker continúe; si no, en espera del cliente.
         </p>
         <BotonAccion
           accion={() => ejecutarDesde(solicitud.id, d)}
@@ -214,7 +223,7 @@ export default function FlujoSolicitud({ detalle }: { detalle: DetalleSolicitud 
         />
       ) : (
         <p className="text-sm text-gray-500">
-          Haz clic en un paso del lienzo para ver qué hizo, la respuesta del servicio y reintentar si falló. Desde Validar DNI o Validar RUC puedes mover la solicitud a ese paso y ejecutarla. En la entrada está lo que mandó Eloqua.
+          Haz clic en un paso del lienzo para ver qué hizo, la respuesta del servicio y reintentar si falló. Desde Validar correo, Validar teléfono, Validar DNI o Validar RUC puedes mover la solicitud a ese paso y ejecutarla. En la entrada está lo que mandó Eloqua.
         </p>
       )}
       <div className="flex flex-wrap gap-x-3 gap-y-1 border-t border-gray-100 pt-3 text-[11px] text-gray-500">

@@ -7,6 +7,8 @@ import CanvasCola from "./_components/CanvasCola";
 import { AvisoError, BASE, Encabezado, TablaSolicitudes, Tarjeta } from "./_components/ui";
 
 export const dynamic = "force-dynamic";
+// Las acciones de prueba esperan la entrega del WhatsApp (hasta 25 s) más los pasos de identidad.
+export const maxDuration = 60;
 
 const ORDEN: EstadoSolicitud[] = ["PENDIENTE", "EN_PROCESO", "OK", "PARCIAL", "ERROR", "EN_ESPERA", "SIN_CONTACTO", "DESCARTADO"];
 

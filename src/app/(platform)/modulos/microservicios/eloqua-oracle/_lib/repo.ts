@@ -365,12 +365,23 @@ export async function registrarEventos(ambiente: Exclude<Ambiente, "demo">, soli
 export async function actualizarSolicitud(
   ambiente: Exclude<Ambiente, "demo">,
   id: number,
-  cambios: Partial<Pick<Solicitud, "estado" | "paso_actual" | "error_paso" | "error_tipo" | "error_motivo" | "error_detalle" | "payload" | "dni">>,
+  cambios: Partial<
+    Pick<Solicitud, "estado" | "paso_actual" | "error_paso" | "error_tipo" | "error_motivo" | "error_detalle" | "payload" | "dni" | "correo_valido" | "telefono_valido"> & {
+      telefono_prueba_id: string | null;
+    }
+  >,
 ): Promise<void> {
   const { error } = await db(ambiente)
     .from("solicitud")
     .update({ ...cambios, updated_at: new Date().toISOString() })
     .eq("id", id);
+  // 42703 = columna inexistente (correo_valido…) · 23514 = el check de estado no conoce EN_ESPERA / SIN_CONTACTO.
+  if (error && (error.code === "42703" || error.code === "23514")) {
+    throw new Error(
+      `Faltan migraciones en el schema ${SCHEMA_POR_AMBIENTE[ambiente]}: ejecutar en Supabase → SQL Editor ` +
+        `IntegracionEloquaOracleSalesCloud/sql/002_seguimiento_cliente.sql, 003_validacion_contacto.sql y 004_unificar_duplicados.sql (${error.message}).`,
+    );
+  }
   if (error) fallo(ambiente, error);
 }
 

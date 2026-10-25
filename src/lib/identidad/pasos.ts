@@ -21,6 +21,7 @@
  */
 import { variantesDni, type PasoId, type ResultadoEvento } from "@/lib/eloqua-oracle";
 import { contactosPorDocumento, contactosPorRuc, type ContactoOracle } from "@/lib/oracle-crm";
+import { probarCorreo, probarTelefono } from "./contacto";
 import { buscarDniExterno } from "./externa";
 import { buscarDni, buscarEmpresasPorNombre, buscarPersonasPorNombre, buscarRuc, type Candidato } from "./padron";
 import { UMBRAL_IDENTIDAD, dividirNombre, dniValido, rucValido, similitud, similitudEmpresa, type NombrePartido } from "./texto";
@@ -32,6 +33,9 @@ export interface LeadIdentidad {
   nombre: string;
   ruc: string;
   empresa: string;
+  /** Solo para la rama de contacto (VALIDAR_CORREO / VALIDAR_TELEFONO). */
+  correo?: string;
+  celular?: string;
 }
 
 export interface EventoPaso {
@@ -315,38 +319,136 @@ export async function validarRuc(lead: LeadIdentidad): Promise<{ eventos: Evento
   return { eventos, salida: { estado: "NO_PASA", motivo } };
 }
 
-/* ── Las dos ramas juntas ────────────────────────────────────────────────── */
+/* ── Rama contacto (correo y teléfono) ───────────────────────────────────── */
 
-export type QuePrueba = "DNI" | "RUC" | "AMBOS";
+export interface SalidaContacto {
+  /** null = no se probó en esta ejecución (prueba unitaria del otro paso). */
+  correoValido: boolean | null;
+  telefonoValido: boolean | null;
+  /** id del mensaje de confirmación (para volver a consultar su entrega). */
+  telefonoPruebaId: string | null;
+}
+
+/** VALIDAR_CORREO, unitario: nunca falla, el resultado es la marca true/false. */
+export async function validarCorreo(lead: LeadIdentidad): Promise<{ evento: EventoPaso; valido: boolean }> {
+  const t0 = Date.now();
+  const r = await probarCorreo(lead.correo ?? "", lead.nombre);
+  return { evento: { paso: "VALIDAR_CORREO", resultado: "OK", duracion_ms: Date.now() - t0, detalle: r.detalle }, valido: r.valido };
+}
+
+/** VALIDAR_TELEFONO, unitario: WhatsApp de confirmación. `telefonoPrueba` lo manda a ese número (Test). */
+export async function validarTelefono(lead: LeadIdentidad, telefonoPrueba?: string): Promise<{ evento: EventoPaso; valido: boolean; messageId: string | null }> {
+  const t0 = Date.now();
+  const r = await probarTelefono(lead.celular ?? "", lead.nombre, telefonoPrueba);
+  return { evento: { paso: "VALIDAR_TELEFONO", resultado: "OK", duracion_ms: Date.now() - t0, detalle: r.detalle }, valido: r.valido, messageId: r.messageId };
+}
+
+/**
+ * VALIDAR_CORREO → VALIDAR_TELEFONO → CONTACTO_VALIDO (→ SIN_CONTACTO_VALIDO si ninguno sirve).
+ * `correoPrevio` (un booleano) salta la prueba de correo y usa ese resultado: es lo que pasa al
+ * mover una solicitud a Validar teléfono.
+ */
+export async function validarContacto(
+  lead: LeadIdentidad,
+  opciones: { telefonoPrueba?: string; correoPrevio?: boolean } = {},
+): Promise<{ eventos: EventoPaso[]; salida: SalidaContacto }> {
+  const eventos: EventoPaso[] = [];
+  // En paralelo: cada uno espera hasta 25 s (rebote del correo / entrega del WhatsApp).
+  const [c, t] = await Promise.all([
+    opciones.correoPrevio !== undefined ? null : validarCorreo(lead),
+    validarTelefono(lead, opciones.telefonoPrueba),
+  ]);
+  if (c) eventos.push(c.evento);
+  const correoValido = c ? c.valido : opciones.correoPrevio!;
+  eventos.push(t.evento);
+  const alguno = correoValido || t.valido;
+  eventos.push({
+    paso: "CONTACTO_VALIDO",
+    resultado: "OK",
+    duracion_ms: 0,
+    detalle: {
+      correo_valido: correoValido,
+      ...(opciones.correoPrevio !== undefined ? { correo: "resultado anterior de la solicitud" } : {}),
+      telefono_valido: t.valido,
+      alguno_valido: alguno,
+    },
+  });
+  if (!alguno) {
+    eventos.push({
+      paso: "SIN_CONTACTO_VALIDO",
+      resultado: "OK",
+      duracion_ms: 0,
+      detalle: { motivo: "Ni el correo ni el teléfono son válidos: sale de la cola y no se crea nada en Oracle" },
+    });
+  }
+  return { eventos, salida: { correoValido, telefonoValido: t.valido, telefonoPruebaId: t.messageId } };
+}
+
+/* ── Las ramas juntas ────────────────────────────────────────────────────── */
+
+/**
+ * CORREO / TELEFONO = un solo paso (prueba unitaria) · CONTACTO = los dos y la decisión ·
+ * DNI / RUC / AMBOS = identidad · TODO = contacto y luego identidad.
+ */
+export type QuePrueba = "CORREO" | "TELEFONO" | "CONTACTO" | "DNI" | "RUC" | "AMBOS" | "TODO";
 
 export interface ResultadoIdentidad {
   eventos: EventoPaso[];
+  contacto: SalidaContacto | null;
   dni: SalidaDni | null;
   ruc: SalidaRuc | null;
-  /** PASA = sigue el flujo · EN_ESPERA = se notifica al cliente · ERROR = fallo técnico (reintentable). */
-  final: "PASA" | "EN_ESPERA" | "ERROR";
+  /**
+   * PASA = sigue el flujo · EN_ESPERA = se notifica al cliente · SIN_CONTACTO = ni correo ni teléfono
+   * válidos, sale de la cola · ERROR = fallo técnico (reintentable) · MARCA = prueba unitaria de
+   * correo o teléfono: solo deja la marca true/false, no decide nada.
+   */
+  final: "PASA" | "EN_ESPERA" | "SIN_CONTACTO" | "ERROR" | "MARCA";
   /** Paso donde quedó la solicitud si no pasa. */
   pasoFinal: PasoId;
   motivo: string | null;
 }
 
-export async function ejecutarIdentidad(lead: LeadIdentidad, que: QuePrueba): Promise<ResultadoIdentidad> {
+export async function ejecutarIdentidad(
+  lead: LeadIdentidad,
+  que: QuePrueba,
+  opciones: { telefonoPrueba?: string; correoPrevio?: boolean } = {},
+): Promise<ResultadoIdentidad> {
+  if (que === "CORREO") {
+    const c = await validarCorreo(lead);
+    const contacto = { correoValido: c.valido, telefonoValido: null, telefonoPruebaId: null };
+    return { eventos: [c.evento], contacto, dni: null, ruc: null, final: "MARCA", pasoFinal: "VALIDAR_CORREO", motivo: null };
+  }
+  if (que === "TELEFONO") {
+    const t = await validarTelefono(lead, opciones.telefonoPrueba);
+    const contacto = { correoValido: null, telefonoValido: t.valido, telefonoPruebaId: t.messageId };
+    return { eventos: [t.evento], contacto, dni: null, ruc: null, final: "MARCA", pasoFinal: "VALIDAR_TELEFONO", motivo: null };
+  }
   const eventos: EventoPaso[] = [];
+  let contacto: SalidaContacto | null = null;
+  if (que === "CONTACTO" || que === "TODO") {
+    const r = await validarContacto(lead, opciones);
+    eventos.push(...r.eventos);
+    contacto = r.salida;
+    if (!contacto.correoValido && !contacto.telefonoValido) {
+      return { eventos, contacto, dni: null, ruc: null, final: "SIN_CONTACTO", pasoFinal: "SIN_CONTACTO_VALIDO", motivo: "Ningún campo válido: ni el correo ni el teléfono" };
+    }
+    if (que === "CONTACTO") return { eventos, contacto, dni: null, ruc: null, final: "PASA", pasoFinal: "VALIDAR_DNI", motivo: null };
+  }
   let dni: SalidaDni | null = null;
   if (que !== "RUC") {
     const r = await validarDni(lead);
     eventos.push(...r.eventos);
     dni = r.salida;
-    if (dni.estado === "ERROR") return { eventos, dni, ruc: null, final: "ERROR", pasoFinal: dni.paso, motivo: dni.motivo };
-    if (dni.estado === "NO_PASA") return { eventos, dni, ruc: null, final: "EN_ESPERA", pasoFinal: "NOTIFICAR_DNI", motivo: dni.motivo };
+    if (dni.estado === "ERROR") return { eventos, contacto, dni, ruc: null, final: "ERROR", pasoFinal: dni.paso, motivo: dni.motivo };
+    if (dni.estado === "NO_PASA") return { eventos, contacto, dni, ruc: null, final: "EN_ESPERA", pasoFinal: "NOTIFICAR_DNI", motivo: dni.motivo };
   }
   let ruc: SalidaRuc | null = null;
   if (que !== "DNI") {
     const r = await validarRuc(lead);
     eventos.push(...r.eventos);
     ruc = r.salida;
-    if (ruc.estado === "ERROR") return { eventos, dni, ruc, final: "ERROR", pasoFinal: ruc.paso, motivo: ruc.motivo };
-    if (ruc.estado === "NO_PASA") return { eventos, dni, ruc, final: "EN_ESPERA", pasoFinal: "NOTIFICAR_RUC", motivo: ruc.motivo };
+    if (ruc.estado === "ERROR") return { eventos, contacto, dni, ruc, final: "ERROR", pasoFinal: ruc.paso, motivo: ruc.motivo };
+    if (ruc.estado === "NO_PASA") return { eventos, contacto, dni, ruc, final: "EN_ESPERA", pasoFinal: "NOTIFICAR_RUC", motivo: ruc.motivo };
   }
-  return { eventos, dni, ruc, final: "PASA", pasoFinal: "ES_CORRECCION", motivo: null };
+  return { eventos, contacto, dni, ruc, final: "PASA", pasoFinal: "ES_CORRECCION", motivo: null };
 }

@@ -11,7 +11,8 @@ export const maxDuration = 60;
  * salida de cada rama. No escribe nada en la cola: eso lo hace el worker.
  *
  *   POST /api/identidad/validar   Authorization: Bearer <IDENTIDAD_API_KEY>
- *   { "dni": "45215942", "nombre": "Carlos Garcia", "ruc": "", "empresa": "", "que": "AMBOS" }
+ *   { "dni": "45215942", "nombre": "Carlos Garcia", "ruc": "", "empresa": "", "correo": "", "celular": "", "que": "AMBOS" }
+ *   que: CORREO · TELEFONO (unitarios) · CONTACTO (los dos + decisión) · DNI · RUC · AMBOS · TODO
  */
 export async function POST(req: Request) {
   const auth = checkApiKey(req, "IDENTIDAD_API_KEY");
@@ -20,11 +21,19 @@ export async function POST(req: Request) {
   const body = (await req.json().catch(() => null)) as Record<string, unknown> | null;
   if (!body) return NextResponse.json({ error: "Body JSON inválido" }, { status: 400 });
   const texto = (k: string) => (typeof body[k] === "string" ? (body[k] as string) : "");
-  const que = (["DNI", "RUC", "AMBOS"].includes(texto("que")) ? texto("que") : "AMBOS") as QuePrueba;
-  if (que !== "RUC" && !texto("dni")) return NextResponse.json({ error: "Falta dni" }, { status: 400 });
+  const que = (["CORREO", "TELEFONO", "CONTACTO", "DNI", "RUC", "AMBOS", "TODO"].includes(texto("que")) ? texto("que") : "AMBOS") as QuePrueba;
+  if (["DNI", "AMBOS", "TODO"].includes(que) && !texto("dni")) return NextResponse.json({ error: "Falta dni" }, { status: 400 });
 
   try {
-    const r = await ejecutarIdentidad({ dni: texto("dni"), nombre: texto("nombre"), ruc: texto("ruc"), empresa: texto("empresa") }, que);
+    const lead = {
+      dni: texto("dni"),
+      nombre: texto("nombre"),
+      ruc: texto("ruc"),
+      empresa: texto("empresa"),
+      correo: texto("correo"),
+      celular: texto("celular"),
+    };
+    const r = await ejecutarIdentidad(lead, que);
     return NextResponse.json(r);
   } catch (e) {
     console.error("[identidad] validar:", e);

@@ -7,12 +7,23 @@ import type { EventoPaso, QuePrueba, ResultadoIdentidad } from "@/lib/identidad/
 import { probarIdentidad, type EstadoServicioIdentidad } from "../actions";
 import { BASE, Tarjeta } from "../_components/ui";
 
-const VACIO = { dni: "", nombres: "", apellidos: "", ruc: "", empresa: "", correo: "", celular: "", programa: "" };
+const VACIO = { dni: "", nombres: "", apellidos: "", ruc: "", empresa: "", correo: "", celular: "991967975", programa: "" };
 
 const OPCIONES: { id: QuePrueba; label: string; ayuda: string }[] = [
+  {
+    id: "CORREO",
+    label: "Validar correo",
+    ayuda: "Solo este paso: revisa el correo y le envía un correo de confirmación; si en los siguientes segundos llega un rebote (dirección inexistente), no es válido.",
+  },
+  {
+    id: "TELEFONO",
+    label: "Validar teléfono",
+    ayuda: "Solo este paso: envía un WhatsApp de confirmación (plantilla contacto1_alerta_ventas_v1) y consulta la entrega cada segundo.",
+  },
   { id: "DNI", label: "Validar DNI", ayuda: "DNI + nombre: padrón SUNAT, ¿extranjero en Oracle?, búsqueda por nombre y ¿alguno ≥75% en Oracle?" },
   { id: "RUC", label: "Validar RUC", ayuda: "¿Tiene RUC?, RUC + razón social, búsqueda por empresa y ¿alguno ≥75% en Oracle?" },
   { id: "AMBOS", label: "DNI y RUC", ayuda: "Las dos ramas en orden, como en la cola: el RUC solo se valida si el DNI pasó." },
+  { id: "TODO", label: "Todo el flujo", ayuda: "Correo y teléfono, luego DNI y RUC, en el orden del lienzo." },
 ];
 
 const ESTILO_RESULTADO: Record<EventoPaso["resultado"], string> = {
@@ -53,6 +64,34 @@ export function decision(e: EventoPaso): { texto: string; tono: "verde" | "rojo"
   if (e.resultado === "ERROR") return { texto: String(d.error ?? "Falló"), tono: "rojo" };
   if (e.resultado === "OMITIDO") return { texto: String(d.motivo ?? "No aplica"), tono: "gris" };
   switch (e.paso) {
+    case "VALIDAR_CORREO": {
+      if (!d.valido) {
+        const rebote = (d.rebote as Record<string, unknown> | undefined)?.detalle ?? (d.error as Record<string, unknown> | undefined)?.detalle;
+        return {
+          texto: `Inválido · false · ${d.motivo ?? ""}${d.sugerencia ? ` (¿quiso decir ${d.sugerencia}?)` : ""}${rebote ? ` — ${rebote}` : ""}`,
+          tono: d.rebote || d.error ? "rojo" : "ambar",
+        };
+      }
+      return d.enviado_a
+        ? { texto: `Válido · true · correo enviado a ${d.correo}, sin rebote en ${d.segundos_esperando ?? "?"} s`, tono: "verde" }
+        : { texto: `Válido · true · ${d.correo}${Array.isArray(d.mx) && d.mx.length ? ` (MX ${d.mx[0]})` : ""}`, tono: "verde" };
+    }
+    case "VALIDAR_TELEFONO": {
+      if (!d.valido) {
+        const err = d.error as Record<string, unknown> | undefined;
+        const extra = err ? [err.nombre, err.detalle].filter(Boolean).join(" · ") : "";
+        return { texto: `Inválido · false · ${d.motivo ?? ""}${extra ? ` — ${extra}` : ""}`, tono: "rojo" };
+      }
+      return d.entrega_confirmada
+        ? { texto: `Válido · true · WhatsApp entregado a ${d.enviado_a} en ${d.segundos_esperando} s`, tono: "verde" }
+        : { texto: `Válido · true · enviado a ${d.enviado_a} sin error; entrega aún sin confirmar tras ${d.segundos_esperando} s`, tono: "verde" };
+    }
+    case "CONTACTO_VALIDO":
+      return d.alguno_valido
+        ? { texto: `Sí · correo ${d.correo_valido} / teléfono ${d.telefono_valido}: sigue con Validar DNI`, tono: "verde" }
+        : { texto: "No · ninguno es válido", tono: "rojo" };
+    case "SIN_CONTACTO_VALIDO":
+      return { texto: String(d.motivo ?? "Sale de la cola"), tono: "rojo" };
     case "VALIDAR_DNI":
     case "VALIDAR_RUC":
       return d.valido
@@ -111,6 +150,81 @@ function TablaTop({ filas }: { filas: { documento: string; nombre: string; coinc
   );
 }
 
+/** Lo que pasó con el WhatsApp de confirmación: a quién, desde dónde, cada consulta de entrega y el error. */
+function DetalleTelefono({ d }: { d: Record<string, unknown> }) {
+  const err = d.error as Record<string, unknown> | undefined;
+  const entrega = d.entrega as Record<string, unknown> | undefined;
+  const filas: [string, unknown][] = [
+    ["Registrado por el lead", d.telefono_registrado],
+    ["Normalizado", d.telefono ? `${d.telefono}${d.correccion ? ` (${d.correccion})` : ""}` : null],
+    ["Enviado a", d.enviado_a ? `${d.enviado_a}${d.numero_de_prueba ? " · número de prueba (ambiente Test)" : ""}` : null],
+    ["Plantilla / remitente", d.plantilla ? `${d.plantilla} · ${d.remitente}` : null],
+    ["message_id", d.message_id],
+    ["Entrega", entrega ? `${entrega.estado} ${entrega.nombre ?? ""}` : null],
+  ];
+  return (
+    <div className="space-y-2 text-xs">
+      <dl className="grid grid-cols-[150px_minmax(0,1fr)] gap-x-3 gap-y-1">
+        {filas
+          .filter(([, v]) => v != null && v !== "")
+          .map(([k, v]) => (
+            <div key={k} className="contents">
+              <dt className="text-gray-400">{k}</dt>
+              <dd className="break-all font-mono text-gray-800">{String(v)}</dd>
+            </div>
+          ))}
+      </dl>
+      {Array.isArray(d.consultas) && d.consultas.length > 0 && (
+        <div className="text-gray-500">Consultas cada segundo: {(d.consultas as string[]).join(" → ")}</div>
+      )}
+      {err && (
+        <div className="rounded-lg border border-red-200 bg-red-50 p-2 text-red-800">
+          <div className="font-semibold">Error del envío</div>
+          <pre className="mt-1 whitespace-pre-wrap font-mono">{JSON.stringify(err, null, 2)}</pre>
+        </div>
+      )}
+      {typeof d.nota === "string" && <div className="text-gray-500">{d.nota}</div>}
+    </div>
+  );
+}
+
+/** Lo que pasó con el correo de confirmación: a quién, desde dónde, cada revisión del buzón y el rebote. */
+function DetalleCorreo({ d }: { d: Record<string, unknown> }) {
+  const rebote = d.rebote as Record<string, unknown> | undefined;
+  const err = d.error as Record<string, unknown> | undefined;
+  const filas: [string, unknown][] = [
+    ["Servidores MX", Array.isArray(d.mx) ? d.mx.join(", ") : null],
+    ["Enviado a", d.enviado_a],
+    ["Remitente", d.remitente],
+    ["Token", d.token],
+    ["message_id", d.message_id],
+  ];
+  return (
+    <div className="space-y-2 text-xs">
+      <dl className="grid grid-cols-[150px_minmax(0,1fr)] gap-x-3 gap-y-1">
+        {filas
+          .filter(([, v]) => v != null && v !== "")
+          .map(([k, v]) => (
+            <div key={k} className="contents">
+              <dt className="text-gray-400">{k}</dt>
+              <dd className="break-all font-mono text-gray-800">{String(v)}</dd>
+            </div>
+          ))}
+      </dl>
+      {Array.isArray(d.consultas) && d.consultas.length > 0 && (
+        <div className="text-gray-500">Revisión del buzón cada segundo: {(d.consultas as string[]).join(" → ")}</div>
+      )}
+      {(rebote || err) && (
+        <div className="rounded-lg border border-red-200 bg-red-50 p-2 text-red-800">
+          <div className="font-semibold">{rebote ? "Rebote recibido" : "Error del envío"}</div>
+          <pre className="mt-1 whitespace-pre-wrap font-mono">{JSON.stringify(rebote ?? err, null, 2)}</pre>
+        </div>
+      )}
+      {typeof d.nota === "string" && <div className="text-gray-500">{d.nota}</div>}
+    </div>
+  );
+}
+
 function Paso({ e, n }: { e: EventoPaso; n: number }) {
   const dec = decision(e);
   const d = e.detalle as Record<string, unknown>;
@@ -139,6 +253,8 @@ function Paso({ e, n }: { e: EventoPaso; n: number }) {
             {typeof d.estado_sunat === "string" && <span className="text-gray-400"> · {d.estado_sunat}</span>}
           </p>
         )}
+        {e.paso === "VALIDAR_TELEFONO" && <DetalleTelefono d={d} />}
+        {e.paso === "VALIDAR_CORREO" && <DetalleCorreo d={d} />}
         <TablaTop filas={top} />
         <details className="text-xs">
           <summary className="cursor-pointer text-gray-400 hover:text-gray-600">Qué hace este paso y respuesta completa</summary>
@@ -151,15 +267,33 @@ function Paso({ e, n }: { e: EventoPaso; n: number }) {
 }
 
 function Veredicto({ r, solicitudId }: { r: ResultadoIdentidad; solicitudId: number | null }) {
+  if (r.final === "MARCA") {
+    const c = r.contacto;
+    const [campo, valor] = c?.correoValido != null ? ["correo_valido", c.correoValido] : ["telefono_valido", c?.telefonoValido];
+    return (
+      <div className={`rounded-xl border px-4 py-3 text-sm ${valor ? "border-emerald-300 bg-emerald-50 text-emerald-900" : "border-amber-300 bg-amber-50 text-amber-900"}`}>
+        <div className="font-bold">
+          {etiquetaPaso(r.pasoFinal)}: <span className="font-mono">{campo} = {String(valor)}</span>
+        </div>
+        <div>Este paso no detiene el flujo: solo deja la marca que se envía a Oracle. «¿Correo o teléfono válido?» decide con las dos.</div>
+      </div>
+    );
+  }
   const estilo =
-    r.final === "PASA"
+    r.final === "SIN_CONTACTO"
+      ? "border-rose-300 bg-rose-50 text-rose-900"
+      : r.final === "PASA"
       ? "border-emerald-300 bg-emerald-50 text-emerald-900"
       : r.final === "EN_ESPERA"
         ? "border-amber-300 bg-amber-50 text-amber-900"
         : "border-red-300 bg-red-50 text-red-900";
   const titulo =
-    r.final === "PASA"
-      ? "Pasa: la solicitud seguiría a «¿Es corrección?»"
+    r.final === "SIN_CONTACTO"
+      ? "Ningún campo válido: la solicitud saldría de la cola"
+      : r.final === "PASA"
+      ? r.pasoFinal === "VALIDAR_DNI"
+        ? "Pasa: al menos un medio de contacto es válido, seguiría a «Validar DNI»"
+        : "Pasa: la solicitud seguiría a «¿Es corrección?»"
       : r.final === "EN_ESPERA"
         ? `No pasa: se notificaría al cliente (${etiquetaPaso(r.pasoFinal)}) y quedaría en espera`
         : `Error técnico en ${etiquetaPaso(r.pasoFinal)}: se reintentaría`;
@@ -169,6 +303,12 @@ function Veredicto({ r, solicitudId }: { r: ResultadoIdentidad; solicitudId: num
     <div className={`space-y-2 rounded-xl border px-4 py-3 text-sm ${estilo}`}>
       <div className="font-bold">{titulo}</div>
       {r.motivo && <div>{r.motivo}</div>}
+      {r.contacto && (
+        <div>
+          correo_valido = <span className="font-mono font-semibold">{String(r.contacto.correoValido)}</span> · telefono_valido ={" "}
+          <span className="font-mono font-semibold">{String(r.contacto.telefonoValido)}</span>
+        </div>
+      )}
       {dni && (dni.estado === "VALIDADO" || dni.estado === "CORREGIDO") && (
         <div>
           DNI {dni.estado === "CORREGIDO" ? "corregido" : "validado"}: <span className="font-mono font-semibold">{dni.dni}</span> · {dni.partido.nombres} /{" "}
@@ -213,8 +353,10 @@ export default function ProbarIdentidad({ ambiente, estado }: { ambiente: Ambien
       }
     });
 
-  const usaDni = que !== "RUC";
-  const usaRuc = que !== "DNI";
+  const usaCorreo = ["CORREO", "CONTACTO", "TODO"].includes(que);
+  const usaTelefono = ["TELEFONO", "CONTACTO", "TODO"].includes(que);
+  const usaDni = ["DNI", "AMBOS", "TODO"].includes(que);
+  const usaRuc = ["RUC", "AMBOS", "TODO"].includes(que);
 
   return (
     <div className="grid gap-6 lg:grid-cols-[380px_minmax(0,1fr)]">
@@ -222,7 +364,7 @@ export default function ProbarIdentidad({ ambiente, estado }: { ambiente: Ambien
         <Tarjeta className="space-y-4 p-5">
           <div>
             <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-500">Paso a probar</div>
-            <div className="grid grid-cols-3 gap-1 rounded-lg border border-gray-300 bg-white p-0.5">
+            <div className="grid grid-cols-2 gap-1 rounded-lg border border-gray-300 bg-white p-0.5">
               {OPCIONES.map((o) => (
                 <button
                   key={o.id}
@@ -237,6 +379,17 @@ export default function ProbarIdentidad({ ambiente, estado }: { ambiente: Ambien
             <p className="mt-2 text-xs text-gray-500">{OPCIONES.find((o) => o.id === que)!.ayuda}</p>
           </div>
 
+          {usaCorreo && <Campo label="Correo" valor={f.correo} onChange={set("correo")} placeholder="EmailAddress" />}
+          {usaTelefono && (
+            <>
+              <Campo label="Celular" valor={f.celular} onChange={set("celular")} placeholder="991967975 (se le agrega el 51)" mono />
+              <p className="-mt-2 text-xs text-gray-400">
+                {ambiente === "prod"
+                  ? "En Prod el WhatsApp de confirmación se envía a este número."
+                  : "En Test el WhatsApp de confirmación siempre va al número de prueba 51991967975."}
+              </p>
+            </>
+          )}
           {usaDni && <Campo label="DNI / documento" valor={f.dni} onChange={set("dni")} placeholder="45215942" mono />}
           <div className="grid grid-cols-2 gap-3">
             <Campo label="Nombres" valor={f.nombres} onChange={set("nombres")} placeholder="FirstName" />
@@ -251,8 +404,6 @@ export default function ProbarIdentidad({ ambiente, estado }: { ambiente: Ambien
           <details className="text-sm">
             <summary className="cursor-pointer text-xs font-semibold text-gray-500">Datos para la solicitud de prueba (opcional)</summary>
             <div className="mt-3 space-y-3">
-              <Campo label="Correo" valor={f.correo} onChange={set("correo")} />
-              <Campo label="Celular" valor={f.celular} onChange={set("celular")} />
               <Campo label="Programa (CTRSalesPrograma_c)" valor={f.programa} onChange={set("programa")} mono />
             </div>
           </details>

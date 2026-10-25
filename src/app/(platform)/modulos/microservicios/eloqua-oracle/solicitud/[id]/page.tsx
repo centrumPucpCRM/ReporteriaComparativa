@@ -8,6 +8,8 @@ import FlujoSolicitud from "../../_components/FlujoSolicitud";
 import { AvisoError, BASE, EstadoBadge, Tarjeta, nombreContacto } from "../../_components/ui";
 
 export const dynamic = "force-dynamic";
+// Las acciones de prueba esperan la entrega del WhatsApp (hasta 25 s) más los pasos de identidad.
+export const maxDuration = 60;
 
 function Dato({ label, children }: { label: string; children: React.ReactNode }) {
   return (

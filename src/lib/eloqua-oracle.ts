@@ -140,9 +140,9 @@ export const DESCRIPCION_PASO: Record<PasoId, string> = {
   VALIDAR:
     "Revisa que el payload traiga dni y CTRSalesPrograma_c. Normaliza el DNI: si es numérico y tiene menos de 8 dígitos, completa con ceros a la izquierda (3040421 → 03040421).",
   VALIDAR_CORREO:
-    "Prueba el correo sin enviarle nada al cliente: sintaxis, que el dominio reciba correo (MX) y que el buzón exista. Marca correo_valido = true o false y sigue: no detiene el flujo. El valor se envía a Oracle.",
+    "Prueba el correo sin enviarle nada al cliente: sintaxis, dominio mal escrito (gmial.com, hotmail.con…) o desechable, y que el dominio reciba correo (MX). Marca correo_valido = true o false y sigue: no detiene el flujo. El valor se envía a Oracle.",
   VALIDAR_TELEFONO:
-    "Envía un mensaje de prueba al celular y espera la confirmación de entrega. Si se entrega, telefono_valido = true; si no se entrega o no hay celular, false. No detiene el flujo. El valor se envía a Oracle.",
+    "Normaliza el celular (un celular peruano de 9 dígitos recibe el 51) y le envía un WhatsApp de confirmación con la plantilla aprobada contacto1_alerta_ventas_v1 de Infobip; consulta el estado cada segundo (hasta 25 s). Entregado, o enviado sin error → telefono_valido = true. Si Infobip no lo acepta o WhatsApp lo rechaza o no lo entrega → false, con el error y su detalle. En Test el mensaje va siempre al 51991967975. No detiene el flujo. El valor se envía a Oracle.",
   CONTACTO_VALIDO:
     "¿Al menos uno de los dos (correo o teléfono) salió válido? Sí → sigue con la validación del DNI. No → no hay cómo contactar al cliente: se guarda en \"Ningún campo válido\".",
   SIN_CONTACTO_VALIDO:

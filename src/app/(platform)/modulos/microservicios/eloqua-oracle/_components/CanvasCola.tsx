@@ -66,8 +66,9 @@ export default function CanvasCola({ cola }: { cola: Cola }) {
   } else if (seleccion) {
     const c = cola.porPaso[seleccion];
     const rama = ramaIdentidad(seleccion);
-    // Una atorada en la rama RUC se mueve a Validar RUC (el DNI ya pasó); cualquier otra, a Validar DNI.
-    const destino = rama === "RUC" ? "VALIDAR_RUC" : "VALIDAR_DNI";
+    // Rama RUC → Validar RUC (el DNI ya pasó) · rama de contacto → Validar correo · cualquier otra → Validar DNI.
+    const destino =
+      rama === "RUC" ? "VALIDAR_RUC" : rama === "TELEFONO" ? "VALIDAR_TELEFONO" : rama === "CORREO" || rama === "CONTACTO" ? "VALIDAR_CORREO" : "VALIDAR_DNI";
     contenido = (
       <>
         <h4 className="font-bold text-gray-900">{etiquetaPaso(seleccion)}</h4>
@@ -134,7 +135,7 @@ export default function CanvasCola({ cola }: { cola: Cola }) {
       </>
     );
   } else {
-    contenido = <p className="text-sm text-gray-500">Haz clic en un paso para ver qué solicitudes están ahí y reintentarlas o pasarlas a Validar DNI / RUC, o en la entrada para ver la cola. En los pasos de DNI y RUC puedes probar un caso ahí mismo.</p>;
+    contenido = <p className="text-sm text-gray-500">Haz clic en un paso para ver qué solicitudes están ahí y reintentarlas o pasarlas a Validar DNI / RUC, o en la entrada para ver la cola. En los pasos de correo / teléfono, DNI y RUC puedes probar un caso ahí mismo.</p>;
   }
 
   return (
