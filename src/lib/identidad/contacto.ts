@@ -14,8 +14,11 @@
  */
 import { enviarPlantillaDirecta, getDeliveryStatus, type EstadoEntrega } from "@/lib/infobip";
 
-/** Plantilla de confirmación: UTILITY, es_PE, aprobada. {{1}} = nombre, {{2}} = sobre qué pidió información. */
-export const PLANTILLA_CONFIRMACION = { nombre: "contacto1_alerta_ventas_v1", idioma: "es_PE" };
+/**
+ * Plantilla de confirmación: UTILITY, es_PE, aprobada (creada para este paso). {{1}} = nombre:
+ * "Hola {{1}}, validamos que tu número es correcto. En breve nos pondremos en contacto contigo."
+ */
+export const PLANTILLA_CONFIRMACION = { nombre: "contacto_validacion_numero_v1", idioma: "es_PE" };
 /** Número de WhatsApp de Infobip desde el que sale la confirmación (uno de los NI de `Infobip_ext.colas`). */
 export const remitenteConfirmacion = () => process.env.INFOBIP_REMITENTE_CONFIRMACION?.trim() || "51993240119";
 /** En Test (y en Demo) los mensajes de prueba siempre van a este número, nunca al del lead. */
@@ -71,7 +74,8 @@ export async function probarTelefono(celular: string, nombre: string, forzarA?: 
   if (!n.numero) return { valido: false, messageId: null, detalle: { ...base, valido: false, motivo: n.motivo } };
 
   const destino = forzarA ?? n.numero;
-  const primerNombre = (nombre.trim().split(/\s+/)[0] ?? "").toLowerCase().replace(/^./, (c) => c.toUpperCase()) || "Hola";
+  // Meta no acepta un parámetro vacío: sin nombre queda "Hola 👋, validamos…".
+  const primerNombre = (nombre.trim().split(/\s+/)[0] ?? "").toLowerCase().replace(/^./, (c) => c.toUpperCase()) || "👋";
   const envio = {
     enviado_a: destino,
     ...(forzarA ? { numero_de_prueba: true } : {}),
@@ -86,7 +90,7 @@ export async function probarTelefono(celular: string, nombre: string, forzarA?: 
       to: destino,
       templateName: PLANTILLA_CONFIRMACION.nombre,
       language: PLANTILLA_CONFIRMACION.idioma,
-      placeholders: [primerNombre, "el programa de tu interés"],
+      placeholders: [primerNombre],
     });
   } catch (e) {
     // Sin credenciales de Infobip, por ejemplo.
@@ -142,7 +146,9 @@ export async function probarTelefono(celular: string, nombre: string, forzarA?: 
       detalle: {
         ...comun,
         valido: false,
-        motivo: `WhatsApp no entregó el mensaje (${ultimo.nombre})`,
+        motivo: /BLACKLIST|BLOCKLIST/i.test(`${ultimo.nombre} ${ultimo.errorNombre}`)
+          ? "Infobip no lo envió: el número está en su lista de bloqueo (un envío anterior lo marcó como inválido o pidió no recibir mensajes)"
+          : `WhatsApp no entregó el mensaje (${ultimo.nombre})`,
         error: { id: ultimo.errorId, nombre: ultimo.errorNombre, detalle: ultimo.errorDescripcion },
       },
     };

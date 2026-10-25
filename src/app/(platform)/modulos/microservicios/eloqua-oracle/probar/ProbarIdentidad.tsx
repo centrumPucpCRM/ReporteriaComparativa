@@ -18,7 +18,7 @@ const OPCIONES: { id: QuePrueba; label: string; ayuda: string }[] = [
   {
     id: "TELEFONO",
     label: "Validar teléfono",
-    ayuda: "Solo este paso: envía un WhatsApp de confirmación (plantilla contacto1_alerta_ventas_v1) y consulta la entrega cada segundo.",
+    ayuda: "Solo este paso: envía un WhatsApp de confirmación (plantilla contacto_validacion_numero_v1) y consulta la entrega cada segundo.",
   },
   { id: "DNI", label: "Validar DNI", ayuda: "DNI + nombre: padrón SUNAT, ¿extranjero en Oracle?, búsqueda por nombre y ¿alguno ≥75% en Oracle?" },
   { id: "RUC", label: "Validar RUC", ayuda: "¿Tiene RUC?, RUC + razón social, búsqueda por empresa y ¿alguno ≥75% en Oracle?" },
